@@ -44,8 +44,92 @@ pub enum Style {
     /// One sentence per line; a sentence is never split.
     #[default]
     Sentence,
-    /// Semantic line breaks: sentences, plus clause boundaries.
+    /// Semantic line breaks: sentences, plus the SemBr rules in
+    /// [`SembrRules`].
     Sembr,
+    /// One line per paragraph: every soft line break is joined.
+    Paragraph,
+}
+
+/// When a SemBr rule breaks a line. Ordered from weakest to strongest, so
+/// the strongest rule that applies to a gap decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Level {
+    /// Never break for this rule.
+    Never,
+    /// Break only where a line would otherwise exceed `width`.
+    Width,
+    /// Break wherever the rule applies.
+    Always,
+}
+
+/// Which marks end an independent clause for SemBr rule 5.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClausePunctuation {
+    pub comma: bool,
+    pub semicolon: bool,
+    pub colon: bool,
+    pub em_dash: bool,
+    pub en_dash: bool,
+}
+
+impl Default for ClausePunctuation {
+    fn default() -> Self {
+        Self {
+            comma: true,
+            semicolon: true,
+            colon: true,
+            em_dash: true,
+            en_dash: true,
+        }
+    }
+}
+
+impl ClausePunctuation {
+    fn contains(&self, punct: sentence::Punct) -> bool {
+        match punct {
+            sentence::Punct::Comma => self.comma,
+            sentence::Punct::Semicolon => self.semicolon,
+            sentence::Punct::Colon => self.colon,
+            sentence::Punct::EmDash => self.em_dash,
+            sentence::Punct::EnDash => self.en_dash,
+        }
+    }
+}
+
+/// The optional rules of the SemBr specification (<https://sembr.org>).
+/// Rules 2, 4 and 9 (rendering unchanged, a break after every sentence, no
+/// break inside a hyphenated word) always hold and have no setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SembrRules {
+    /// Rule 5 (SHOULD): after an independent clause.
+    pub independent_clauses: Level,
+    /// The marks that count for rule 5.
+    pub clause_punctuation: ClausePunctuation,
+    /// Rule 6 (MAY): after a dependent clause.
+    pub dependent_clauses: Level,
+    /// Rule 7 (RECOMMENDED): before an inline enumerated list item.
+    pub before_lists: Level,
+    /// Rule 8 (MAY): after an item in a series.
+    pub list_items: Level,
+    /// Rule 10 (MAY): before and after a hyperlink.
+    pub links: Level,
+    /// Rule 11 (MAY): before inline markup.
+    pub inline_markup: Level,
+}
+
+impl Default for SembrRules {
+    fn default() -> Self {
+        Self {
+            independent_clauses: Level::Always,
+            clause_punctuation: ClausePunctuation::default(),
+            dependent_clauses: Level::Width,
+            before_lists: Level::Always,
+            list_items: Level::Never,
+            links: Level::Never,
+            inline_markup: Level::Never,
+        }
+    }
 }
 
 /// What to do with line breaks already in a paragraph.
@@ -62,14 +146,28 @@ pub enum ExistingBreaks {
 }
 
 /// Formatting options.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
     pub style: Style,
-    /// In the `sembr` style, only add clause breaks to lines longer than
-    /// this many characters. 0 breaks at every clause boundary.
+    /// In the `sembr` style, the line length rules at [`Level::Width`]
+    /// break to stay within (SemBr rule 12 recommends 80). 0 means no
+    /// limit, so those rules never fire.
     pub width: usize,
     /// In the `sembr` style, whether to keep clause breaks already there.
     pub existing_breaks: ExistingBreaks,
+    /// In the `sembr` style, which SemBr rules apply.
+    pub sembr: SembrRules,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            style: Style::default(),
+            width: 80,
+            existing_breaks: ExistingBreaks::default(),
+            sembr: SembrRules::default(),
+        }
+    }
 }
 
 /// Rewrites the line breaks in a document's paragraph prose and leaves
@@ -151,6 +249,11 @@ struct Run {
     start: usize,
     end: usize,
     pieces: Vec<Piece>,
+    /// Source ranges of top-level links and images (SemBr rule 10).
+    links: Vec<Range<usize>>,
+    /// Where inline markup starts: emphasis, strong, strikethrough, code
+    /// spans and inline HTML (rule 11).
+    markup: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -282,12 +385,29 @@ fn collect_runs(src: &str) -> Vec<Run> {
             start: range.start,
             end: range.start,
             pieces: Vec::new(),
+            links: Vec::new(),
+            markup: Vec::new(),
         });
         if let Some((gap_start, breakable)) = pending_gap.take() {
             run.pieces.push(Piece::Gap {
                 range: gap_start..range.start,
                 breakable,
             });
+        }
+        let top_level = link_depth == 0
+            || matches!(&event, Event::Start(Tag::Link { .. } | Tag::Image { .. }) if link_depth == 1);
+        match &event {
+            Event::Start(Tag::Link { .. } | Tag::Image { .. }) if top_level => {
+                run.links.push(range.clone());
+            }
+            Event::Start(Tag::Emphasis | Tag::Strong | Tag::Strikethrough)
+            | Event::Code(_)
+            | Event::InlineHtml(_)
+                if top_level =>
+            {
+                run.markup.push(range.start);
+            }
+            _ => {}
         }
         match event {
             Event::Text(_) => run.pieces.push(Piece::Text {
@@ -339,6 +459,9 @@ struct Slot {
     /// The source already breaks the line here.
     existing: bool,
     kind: Kind,
+    /// The strongest SemBr rule that applies here, if any (sembr style
+    /// only). `Some(Level::Never)` means a rule matched but is switched off.
+    rule: Option<Level>,
     /// The text before the slot ends with clause punctuation (`,` `;` `:`
     /// or a dash). An existing break here can be a deliberate one even when
     /// sember wouldn't add it.
@@ -350,17 +473,17 @@ struct Slot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
-    /// Ends a sentence: always a line break.
+    /// Ends a sentence: a break in every style but `paragraph`.
     Sentence,
-    /// Ends a clause: a break in the `sembr` style.
-    Clause,
-    /// Mid-clause, or inside a link: never a break.
-    None,
     /// A hard break in the source: always kept.
     Hard,
+    /// Anywhere else. In the `sembr` style, `rule` says whether a SemBr rule
+    /// applies here and at what level.
+    Prose,
 }
 
 fn slots(src: &str, run: &Run, config: &Config) -> Vec<Slot> {
+    let rules = &config.sembr;
     let mut slots = Vec::new();
     let mut clause_start = run.start;
     let mut column = 0;
@@ -370,19 +493,49 @@ fn slots(src: &str, run: &Run, config: &Config) -> Vec<Slot> {
         cursor = range.end;
         let before = &src[run.start..range.start];
         let after = &src[range.end..run.end];
-        let allowed = breakable && !starts_block(after);
+        let allowed = breakable && !starts_block(after) && !ends_reference_definition(before);
+        let mut rule = None;
         let kind = if !allowed {
-            Kind::None
+            Kind::Prose
         } else if sentence::is_boundary(before, after) {
             clause_start = range.end;
             Kind::Sentence
-        } else if config.style == Style::Sembr
-            && sentence::is_clause_boundary(&src[clause_start..range.start], after)
-        {
-            clause_start = range.end;
-            Kind::Clause
         } else {
-            Kind::None
+            if config.style == Style::Sembr {
+                let mut consider = |level: Level| {
+                    rule = Some(rule.map_or(level, |current: Level| current.max(level)));
+                };
+                let clause_so_far = &src[clause_start..range.start];
+                match sentence::clause(clause_so_far, after) {
+                    Some(sentence::Clause::Independent(punct)) => {
+                        clause_start = range.end;
+                        if rules.clause_punctuation.contains(punct) {
+                            consider(rules.independent_clauses);
+                        }
+                    }
+                    Some(sentence::Clause::Dependent) => {
+                        clause_start = range.end;
+                        consider(rules.dependent_clauses);
+                    }
+                    Some(sentence::Clause::ListItem) => consider(rules.list_items),
+                    None => {}
+                }
+                let room = sentence::has_room(clause_so_far, after);
+                if room && sentence::starts_inline_list(after) {
+                    consider(rules.before_lists);
+                }
+                let at_link = run
+                    .links
+                    .iter()
+                    .any(|link| link.start == range.end || link.end == range.start);
+                if room && at_link {
+                    consider(rules.links);
+                }
+                if room && run.markup.contains(&range.end) {
+                    consider(rules.inline_markup);
+                }
+            }
+            Kind::Prose
         };
         let punctuated = allowed
             && before
@@ -392,6 +545,7 @@ fn slots(src: &str, run: &Run, config: &Config) -> Vec<Slot> {
             range,
             existing,
             kind,
+            rule,
             punctuated,
             column,
         });
@@ -405,6 +559,7 @@ fn slots(src: &str, run: &Run, config: &Config) -> Vec<Slot> {
                 push(range.clone(), true, false, &mut slots);
                 if let Some(slot) = slots.last_mut() {
                     slot.kind = Kind::Hard;
+                    slot.rule = None;
                 }
             }
             Piece::Text { range, breakable } => {
@@ -450,9 +605,9 @@ fn run_edits(src: &str, run: &Run, config: &Config) -> Vec<Edit> {
         && match config.existing_breaks {
             ExistingBreaks::Keep => true,
             ExistingBreaks::Reflow => false,
-            ExistingBreaks::Auto => !slots
-                .iter()
-                .any(|slot| slot.existing && slot.kind == Kind::None && !slot.punctuated),
+            ExistingBreaks::Auto => !slots.iter().any(|slot| {
+                slot.existing && slot.kind == Kind::Prose && slot.rule.is_none() && !slot.punctuated
+            }),
         };
 
     // A line break next to a `:::` line belongs to a fenced div (Quarto,
@@ -469,27 +624,28 @@ fn run_edits(src: &str, run: &Run, config: &Config) -> Vec<Edit> {
         .zip(&fenced)
         .map(|(slot, &fenced)| match slot.kind {
             _ if fenced => true,
-            Kind::Sentence | Kind::Hard => true,
-            Kind::Clause | Kind::None => {
-                keep_existing && slot.existing && (slot.kind == Kind::Clause || slot.punctuated)
+            Kind::Hard => true,
+            Kind::Sentence => config.style != Style::Paragraph,
+            Kind::Prose => {
+                let deliberate = slot.punctuated || slot.rule.is_some_and(|l| l > Level::Never);
+                slot.rule == Some(Level::Always) || keep_existing && slot.existing && deliberate
             }
         })
         .collect();
 
-    if config.style == Style::Sembr {
-        if config.width == 0 {
-            for (slot, brk) in slots.iter().zip(breaks.iter_mut()) {
-                *brk |= slot.kind == Kind::Clause;
-            }
-        } else {
-            fit_to_width(
-                &slots,
-                &mut breaks,
-                total,
-                prefix.chars().count(),
-                config.width,
-            );
-        }
+    if config.style == Style::Sembr && config.width > 0 {
+        let candidates: Vec<bool> = slots
+            .iter()
+            .map(|slot| slot.rule == Some(Level::Width))
+            .collect();
+        fit_to_width(
+            &slots,
+            &candidates,
+            &mut breaks,
+            total,
+            prefix.chars().count(),
+            config.width,
+        );
     }
 
     let mut edits = Vec::new();
@@ -514,11 +670,18 @@ fn run_edits(src: &str, run: &Run, config: &Config) -> Vec<Edit> {
     edits
 }
 
-/// Within each line already fixed by sentence or kept breaks, adds clause
-/// breaks until the line fits in `width` characters: the latest clause
-/// boundary that fits, or the earliest one past the limit if none does.
-/// Lines with no clause boundary stay long rather than breaking mid-phrase.
-fn fit_to_width(slots: &[Slot], breaks: &mut [bool], total: usize, indent: usize, width: usize) {
+/// Within each line already fixed by other breaks, adds breaks at
+/// `candidates` until the line fits in `width` characters: the latest
+/// candidate that fits, or the earliest one past the limit if none does.
+/// Lines with no candidate stay long rather than breaking mid-phrase.
+fn fit_to_width(
+    slots: &[Slot],
+    candidates: &[bool],
+    breaks: &mut [bool],
+    total: usize,
+    indent: usize,
+    width: usize,
+) {
     let mut line_start = 0;
     let mut i = 0;
     while i <= slots.len() {
@@ -526,7 +689,7 @@ fn fit_to_width(slots: &[Slot], breaks: &mut [bool], total: usize, indent: usize
         let next_fixed = (i..slots.len()).find(|&j| breaks[j]);
         let line_end = next_fixed.map_or(total, |j| slots[j].column);
         let candidates: Vec<usize> = (i..next_fixed.unwrap_or(slots.len()))
-            .filter(|&j| slots[j].kind == Kind::Clause)
+            .filter(|&j| candidates[j])
             .collect();
         let mut start = line_start;
         let mut remaining = candidates.as_slice();
@@ -550,6 +713,21 @@ fn fit_to_width(slots: &[Slot], breaks: &mut [bool], total: usize, indent: usize
             None => break,
         }
     }
+}
+
+/// Whether breaking after `before` would leave a paragraph's first line
+/// reading `[label]: destination`, which Markdown takes as a link reference
+/// definition: the text would vanish from the page. `before` is the run so
+/// far; if an earlier break already moved the line start, refusing here is
+/// merely cautious.
+fn ends_reference_definition(before: &str) -> bool {
+    let Some(rest) = before.trim_start().strip_prefix('[') else {
+        return false;
+    };
+    let Some((label, tail)) = rest.split_once("]:") else {
+        return false;
+    };
+    !label.contains(['[', '\n']) && tail.split_whitespace().count() <= 1
 }
 
 /// Whether the line before or after a line break starts with `:::`, after

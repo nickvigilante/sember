@@ -38,7 +38,7 @@ use globset::{GlobBuilder, GlobMatcher};
 use serde::Deserialize;
 use toml::{Table, Value};
 
-use crate::{Config, ExistingBreaks, Style};
+use crate::{ClausePunctuation, Config, ExistingBreaks, Level, Style};
 
 /// The config file's name.
 pub const FILE_NAME: &str = ".sember.toml";
@@ -73,6 +73,115 @@ pub struct Partial {
     pub style: Option<StyleName>,
     pub width: Option<usize>,
     pub existing_breaks: Option<ExistingName>,
+    pub sembr: SembrPartial,
+}
+
+/// The `[sembr]` table: SemBr rule levels, each optional.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SembrPartial {
+    pub independent_clauses: Option<Level>,
+    pub clause_punctuation: Option<ClausePunctuation>,
+    pub dependent_clauses: Option<Level>,
+    pub before_lists: Option<Level>,
+    pub list_items: Option<Level>,
+    pub links: Option<Level>,
+    pub inline_markup: Option<Level>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum LevelName {
+    Always,
+    Width,
+    Never,
+}
+
+impl From<LevelName> for Level {
+    fn from(name: LevelName) -> Self {
+        match name {
+            LevelName::Always => Level::Always,
+            LevelName::Width => Level::Width,
+            LevelName::Never => Level::Never,
+        }
+    }
+}
+
+impl SembrPartial {
+    const KEYS: &str = "`independent-clauses`, `clause-punctuation`, `dependent-clauses`, `before-lists`, `list-items`, `links` or `inline-markup`";
+
+    fn parse(table: &Table, context: &str) -> Result<Self, String> {
+        let mut rules = SembrPartial::default();
+        for (key, value) in table {
+            let level = || -> Result<Level, String> {
+                let name: LevelName = value
+                    .clone()
+                    .try_into()
+                    .map_err(|e: toml::de::Error| format!("{context} `{key}`: {}", e.message()))?;
+                Ok(name.into())
+            };
+            match key.as_str() {
+                "independent-clauses" => rules.independent_clauses = Some(level()?),
+                "dependent-clauses" => rules.dependent_clauses = Some(level()?),
+                "before-lists" => rules.before_lists = Some(level()?),
+                "list-items" => rules.list_items = Some(level()?),
+                "links" => rules.links = Some(level()?),
+                "inline-markup" => rules.inline_markup = Some(level()?),
+                "clause-punctuation" => {
+                    let bad = || {
+                        format!(
+                            "{context} `clause-punctuation`: expected a list drawn from \",\", \";\", \":\", \"—\" and \"–\""
+                        )
+                    };
+                    let Value::Array(marks) = value else {
+                        return Err(bad());
+                    };
+                    let mut set = ClausePunctuation {
+                        comma: false,
+                        semicolon: false,
+                        colon: false,
+                        em_dash: false,
+                        en_dash: false,
+                    };
+                    for mark in marks {
+                        match mark.as_str() {
+                            Some(",") => set.comma = true,
+                            Some(";") => set.semicolon = true,
+                            Some(":") => set.colon = true,
+                            Some("—") => set.em_dash = true,
+                            Some("–") => set.en_dash = true,
+                            _ => return Err(bad()),
+                        }
+                    }
+                    rules.clause_punctuation = Some(set);
+                }
+                _ => {
+                    return Err(format!(
+                        "{context}: unknown rule `{key}`; expected {}",
+                        Self::KEYS
+                    ));
+                }
+            }
+        }
+        Ok(rules)
+    }
+
+    fn apply(&self, config: &mut Config) {
+        let rules = &mut config.sembr;
+        let set = |target: &mut Level, value: Option<Level>| {
+            if let Some(value) = value {
+                *target = value;
+            }
+        };
+        set(&mut rules.independent_clauses, self.independent_clauses);
+        set(&mut rules.dependent_clauses, self.dependent_clauses);
+        set(&mut rules.before_lists, self.before_lists);
+        set(&mut rules.list_items, self.list_items);
+        set(&mut rules.links, self.links);
+        set(&mut rules.inline_markup, self.inline_markup);
+        if let Some(punctuation) = self.clause_punctuation {
+            rules.clause_punctuation = punctuation;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -80,6 +189,7 @@ pub struct Partial {
 pub enum StyleName {
     Sentence,
     Sembr,
+    Paragraph,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -97,8 +207,10 @@ impl Partial {
             config.style = match style {
                 StyleName::Sentence => Style::Sentence,
                 StyleName::Sembr => Style::Sembr,
+                StyleName::Paragraph => Style::Paragraph,
             };
         }
+        self.sembr.apply(config);
         if let Some(width) = self.width {
             config.width = width;
         }
@@ -123,6 +235,12 @@ impl Partial {
             "style" => self.style = Some(typed(key, value)?),
             "width" => self.width = Some(typed(key, value)?),
             "existing-breaks" => self.existing_breaks = Some(typed(key, value)?),
+            "sembr" => {
+                let Value::Table(table) = value else {
+                    return Err("`sembr`: expected a table of rules".to_owned());
+                };
+                self.sembr = SembrPartial::parse(table, "[sembr]")?;
+            }
             _ => return Ok(false),
         }
         Ok(true)
@@ -258,7 +376,7 @@ impl ConfigFile {
                             .map_err(|e| format!("[\"{name}\"] {e}"))?;
                         if !known {
                             return Err(format!(
-                                "[\"{name}\"]: unknown key `{key}`; expected `style`, `width` or `existing-breaks`"
+                                "[\"{name}\"]: unknown key `{key}`; expected `style`, `width`, `existing-breaks` or `sembr`"
                             ));
                         }
                     }
@@ -266,7 +384,7 @@ impl ConfigFile {
                 }
                 (key, _) => {
                     return Err(format!(
-                        "unknown key `{key}`; expected `style`, `width`, `existing-breaks`, `exclude`, `formats` or a glob section"
+                        "unknown key `{key}`; expected `style`, `width`, `existing-breaks`, `sembr`, `exclude`, `formats` or a glob section"
                     ));
                 }
             }
@@ -341,7 +459,7 @@ mod tests {
     use std::path::Path;
 
     use super::{ConfigFile, Format};
-    use crate::{Config, ExistingBreaks, Style};
+    use crate::{Config, ExistingBreaks, Level, Style};
 
     fn parse(text: &str) -> ConfigFile {
         ConfigFile::parse(text, Path::new("/repo")).unwrap()
@@ -391,7 +509,7 @@ existing-breaks = "keep"
         assert_eq!(config_for(&file, "/repo/a/b/c.mdx").style, Style::Sembr);
         // With a slash: the relative path, where `*` stays in one directory.
         assert_eq!(config_for(&file, "/repo/docs/a.md").width, 70);
-        assert_eq!(config_for(&file, "/repo/docs/sub/a.md").width, 0);
+        assert_eq!(config_for(&file, "/repo/docs/sub/a.md").width, 80);
     }
 
     #[test]
@@ -409,6 +527,30 @@ existing-breaks = "keep"
     }
 
     #[test]
+    fn sembr_rules_top_level_and_in_sections() {
+        let file = parse(
+            r#"
+style = "sembr"
+
+[sembr]
+dependent-clauses = "always"
+clause-punctuation = [";", "—"]
+
+["docs/**".sembr]
+links = "width"
+"#,
+        );
+        let top = config_for(&file, "/repo/README.md");
+        assert_eq!(top.sembr.dependent_clauses, Level::Always);
+        assert!(!top.sembr.clause_punctuation.comma);
+        assert!(top.sembr.clause_punctuation.semicolon);
+        assert_eq!(top.sembr.links, Level::Never);
+        let docs = config_for(&file, "/repo/docs/a.md");
+        assert_eq!(docs.sembr.links, Level::Width);
+        assert_eq!(docs.sembr.dependent_clauses, Level::Always);
+    }
+
+    #[test]
     fn rejects_mistakes() {
         for text in [
             "stlye = \"sembr\"\n",
@@ -420,6 +562,10 @@ existing-breaks = "keep"
             "[\"docs/**\"]\nwidht = 3\n",
             "[\"docs/**\"]\nexclude = [\"x\"]\n",
             "[\"docs/[x\"]\nstyle = \"sembr\"\n",
+            "[sembr]\nlinks = \"sometimes\"\n",
+            "[sembr]\nlnks = \"always\"\n",
+            "[sembr]\nclause-punctuation = [\"!\"]\n",
+            "sembr = \"on\"\n",
         ] {
             assert!(
                 ConfigFile::parse(text, Path::new("/repo")).is_err(),

@@ -127,16 +127,54 @@ fn bare(word: &str) -> String {
         .to_lowercase()
 }
 
-/// Reports whether a line may break between `before` and `after` at a
-/// clause boundary. `before` is the current clause up to the gap: the text
-/// since the last sentence or clause boundary.
-///
-/// Both sides must keep at least two words, so a break never strands a
-/// single word on a line.
-pub fn is_clause_boundary(before: &str, after: &str) -> bool {
-    let before_words: Vec<&str> = words(before).collect();
-    if before_words.len() < 2 || words(after).take(2).count() < 2 {
+/// Clause punctuation that can end an independent clause (SemBr rule 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Punct {
+    Comma,
+    Semicolon,
+    Colon,
+    EmDash,
+    EnDash,
+}
+
+/// The kind of clause boundary a gap sits on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Clause {
+    /// After an independent clause (SemBr rule 5).
+    Independent(Punct),
+    /// After a dependent clause (rule 6): "If the build fails, / the logs".
+    Dependent,
+    /// Between items of a series (rule 8): "A, / B, or C".
+    ListItem,
+}
+
+/// Whether both sides of a gap keep at least two words, so a break never
+/// strands a single word on a line. `before` is the current clause so far.
+pub fn has_room(before: &str, after: &str) -> bool {
+    words(before).take(2).count() == 2 && words(after).take(2).count() == 2
+}
+
+/// Whether `after` opens an inline enumerated list item such as "(1)",
+/// "(b)" or "(iv)" (SemBr rule 7 recommends a break before it).
+pub fn starts_inline_list(after: &str) -> bool {
+    let Some(rest) = after.strip_prefix('(') else {
         return false;
+    };
+    let Some((label, tail)) = rest.split_once(')') else {
+        return false;
+    };
+    let enumerator = (1..=2).contains(&label.len()) && label.bytes().all(|b| b.is_ascii_digit())
+        || label.len() == 1 && label.bytes().all(|b| b.is_ascii_lowercase())
+        || (1..=4).contains(&label.len()) && label.bytes().all(|b| matches!(b, b'i' | b'v' | b'x'));
+    enumerator && tail.starts_with([' ', '\t'])
+}
+
+/// Classifies the gap between `before` and `after` as a clause boundary,
+/// if it is one. `before` is the current clause up to the gap: the text
+/// since the last sentence or clause boundary.
+pub fn clause(before: &str, after: &str) -> Option<Clause> {
+    if !has_room(before, after) {
+        return None;
     }
     // Inside parentheses or brackets the aside stays on one line.
     let depth = |open: char, close: char| {
@@ -144,31 +182,44 @@ pub fn is_clause_boundary(before: &str, after: &str) -> bool {
             - before.chars().filter(|&c| c == close).count() as isize
     };
     if depth('(', ')') > 0 || depth('[', ']') > 0 {
-        return false;
+        return None;
     }
 
     let trimmed = before.trim_end_matches(['*', '_', '"', '”', ')']);
     let next = bare(after.split_whitespace().next().unwrap_or(""));
     match trimmed.chars().next_back() {
-        Some(';') | Some('—') | Some('–') => true,
-        Some(':') => !after.starts_with(|c: char| c.is_ascii_digit()),
+        Some(';') => Some(Clause::Independent(Punct::Semicolon)),
+        Some('—') => Some(Clause::Independent(Punct::EmDash)),
+        Some('–') => Some(Clause::Independent(Punct::EnDash)),
+        Some(':') if !after.starts_with(|c: char| c.is_ascii_digit()) => {
+            Some(Clause::Independent(Punct::Colon))
+        }
         Some(',') => {
+            let before_words: Vec<&str> = words(before).collect();
             let last = before_words.last().copied().unwrap_or("");
             if is_abbreviation(last.trim_end_matches(',')) {
-                return false;
+                return None;
             }
-            // Another comma earlier in the same stretch means a series:
-            // "A, B, or C" stays on one line.
+            // Another comma in the same stretch, before or after the gap,
+            // means a series: "A, B, or C".
             let earlier = &trimmed[..trimmed.len() - 1];
             let in_series = earlier
                 .rsplit([';', ':'])
                 .next()
                 .is_some_and(|stretch| stretch.contains(','));
+            let series_ahead = after
+                .split(['.', ';', ':', '!', '?'])
+                .next()
+                .is_some_and(|stretch| stretch.contains(','));
             if COORDINATORS.contains(&next.as_str()) {
-                return !in_series;
+                return Some(if in_series {
+                    Clause::ListItem
+                } else {
+                    Clause::Independent(Punct::Comma)
+                });
             }
             if SUBORDINATORS.contains(&next.as_str()) {
-                return true;
+                return Some(Clause::Dependent);
             }
             // The first comma of a clause that opens with "If", "When"...,
             // possibly after a conjunction ("and when a user logs in, the").
@@ -176,17 +227,69 @@ pub fn is_clause_boundary(before: &str, after: &str) -> bool {
             let first = opening
                 .find(|w| !COORDINATORS.contains(&w.as_str()))
                 .unwrap_or_default();
-            INTRODUCERS.contains(&first.as_str())
+            if INTRODUCERS.contains(&first.as_str())
                 && !earlier.contains(',')
                 && before_words.len() >= 3
+            {
+                return Some(Clause::Dependent);
+            }
+            (in_series || series_ahead).then_some(Clause::ListItem)
         }
-        _ => before.ends_with(" --"),
+        _ if before.ends_with(" --") => Some(Clause::Independent(Punct::EmDash)),
+        _ => None,
     }
+}
+
+/// Whether the gap is a clause boundary of a kind `sember` breaks at by
+/// default: an independent or dependent clause, not a list item.
+#[cfg(test)]
+fn is_clause_boundary(before: &str, after: &str) -> bool {
+    matches!(
+        clause(before, after),
+        Some(Clause::Independent(_) | Clause::Dependent)
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_boundary, is_clause_boundary};
+    use super::{Clause, Punct, clause, is_boundary, is_clause_boundary, starts_inline_list};
+
+    #[test]
+    fn clause_kinds() {
+        assert_eq!(
+            clause("Run the job nightly;", "then prune old snapshots."),
+            Some(Clause::Independent(Punct::Semicolon))
+        );
+        assert_eq!(
+            clause("Coder runs the template,", "and the build starts."),
+            Some(Clause::Independent(Punct::Comma))
+        );
+        assert_eq!(
+            clause("If the build fails,", "the logs are kept."),
+            Some(Clause::Dependent)
+        );
+        assert_eq!(
+            clause("Logs are kept,", "which helps debugging."),
+            Some(Clause::Dependent)
+        );
+        assert_eq!(
+            clause("The answer is A, B,", "or C today."),
+            Some(Clause::ListItem)
+        );
+        assert_eq!(
+            clause("Pick the red one,", "the blue one, or both."),
+            Some(Clause::ListItem)
+        );
+    }
+
+    #[test]
+    fn inline_lists() {
+        assert!(starts_inline_list("(1) build it"));
+        assert!(starts_inline_list("(b) test it"));
+        assert!(starts_inline_list("(iv) ship it"));
+        assert!(!starts_inline_list("(see below) for more"));
+        assert!(!starts_inline_list("(1)build"));
+    }
 
     #[test]
     fn clause_boundaries() {

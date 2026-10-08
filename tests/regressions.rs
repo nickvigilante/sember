@@ -105,6 +105,7 @@ mod sembr {
             style: Style::Sembr,
             width,
             existing_breaks,
+            ..Config::default()
         }
     }
 
@@ -127,11 +128,13 @@ mod sembr {
         assert_formats(&sembr(0, ExistingBreaks::Auto), src, src);
     }
 
-    /// A hard-wrapped paragraph is unwrapped and re-broken at clauses.
+    /// A hard-wrapped paragraph is unwrapped and re-broken at clauses: the
+    /// independent clause always, the dependent one because the line is
+    /// over 80 characters.
     #[test]
     fn reflows_hard_wrapped_paragraphs() {
         assert_formats(
-            &sembr(0, ExistingBreaks::Auto),
+            &sembr(80, ExistingBreaks::Auto),
             "If the build fails, the logs are kept so you can see which\nresource caused the problem, and the next build starts clean.\n",
             "If the build fails,\nthe logs are kept so you can see which resource caused the problem,\nand the next build starts clean.\n",
         );
@@ -147,15 +150,21 @@ mod sembr {
         );
     }
 
-    /// With a width, clause breaks are added only where a line is too long,
-    /// at the last clause boundary that fits, and never mid-phrase.
+    /// Rules at the `width` level (dependent clauses by default) break only
+    /// where a line is too long, at the last boundary that fits, and never
+    /// mid-phrase. Independent clauses break regardless of length.
     #[test]
     fn width_picks_the_last_fitting_clause() {
         let config = sembr(50, ExistingBreaks::Auto);
         assert_formats(
             &config,
-            "Short line, and it stays.\n",
-            "Short line, and it stays.\n",
+            "If it fails, it retries.\n",
+            "If it fails, it retries.\n",
+        );
+        assert_formats(
+            &config,
+            "Short line, and it breaks.\n",
+            "Short line,\nand it breaks.\n",
         );
         assert_formats(
             &config,
@@ -189,8 +198,168 @@ mod sembr {
     fn clause_breaks_in_lists() {
         assert_formats(
             &sembr(0, ExistingBreaks::Auto),
-            "- If the build fails, the logs are kept.\n",
-            "- If the build fails,\n  the logs are kept.\n",
+            "- The build failed, and the logs are kept.\n",
+            "- The build failed,\n  and the logs are kept.\n",
         );
     }
+}
+
+/// SemBr rules switched on and off (https://sembr.org).
+mod sembr_rules {
+    use sember::{Config, Level, SembrRules, Style, format_markdown};
+
+    fn with(rules: SembrRules, width: usize) -> Config {
+        Config {
+            style: Style::Sembr,
+            width,
+            sembr: rules,
+            ..Config::default()
+        }
+    }
+
+    fn assert_formats(config: &Config, src: &str, expected: &str) {
+        let formatted = format_markdown(src, config);
+        assert_eq!(formatted.output, expected);
+        assert!(formatted.kept.is_empty(), "kept: {:?}", formatted.kept);
+        assert_eq!(
+            format_markdown(expected, config).output,
+            expected,
+            "not idempotent"
+        );
+    }
+
+    const NO_WIDTH: usize = 0;
+
+    #[test]
+    fn independent_clauses_can_be_switched_off() {
+        let src = "The build failed, and the logs are kept.\n";
+        let off = SembrRules {
+            independent_clauses: Level::Never,
+            ..SembrRules::default()
+        };
+        assert_formats(&with(off, NO_WIDTH), src, src);
+    }
+
+    #[test]
+    fn clause_punctuation_limits_rule_5() {
+        let rules = SembrRules {
+            clause_punctuation: sember::ClausePunctuation {
+                comma: false,
+                ..Default::default()
+            },
+            ..SembrRules::default()
+        };
+        assert_formats(
+            &with(rules, NO_WIDTH),
+            "It failed, and it retried; then it passed.\n",
+            "It failed, and it retried;\nthen it passed.\n",
+        );
+    }
+
+    #[test]
+    fn dependent_clauses_always() {
+        let rules = SembrRules {
+            dependent_clauses: Level::Always,
+            ..SembrRules::default()
+        };
+        assert_formats(
+            &with(rules, NO_WIDTH),
+            "If it fails, it retries.\n",
+            "If it fails,\nit retries.\n",
+        );
+    }
+
+    #[test]
+    fn before_inline_lists() {
+        assert_formats(
+            &with(SembrRules::default(), NO_WIDTH),
+            "Pick one of the options (1) keep the logs or (2) drop them.\n",
+            "Pick one of the options\n(1) keep the logs or\n(2) drop them.\n",
+        );
+    }
+
+    #[test]
+    fn list_items_when_switched_on() {
+        let rules = SembrRules {
+            list_items: Level::Always,
+            ..SembrRules::default()
+        };
+        assert_formats(
+            &with(rules, NO_WIDTH),
+            "Pack the red tent, the blue stove, and the green map.\n",
+            "Pack the red tent,\nthe blue stove,\nand the green map.\n",
+        );
+    }
+
+    #[test]
+    fn links_when_switched_on() {
+        let rules = SembrRules {
+            links: Level::Always,
+            ..SembrRules::default()
+        };
+        assert_formats(
+            &with(rules, NO_WIDTH),
+            "Read the [install guide](https://example.com/install) before you start.\n",
+            "Read the\n[install guide](https://example.com/install)\nbefore you start.\n",
+        );
+    }
+
+    #[test]
+    fn inline_markup_when_switched_on() {
+        let rules = SembrRules {
+            inline_markup: Level::Always,
+            ..SembrRules::default()
+        };
+        assert_formats(
+            &with(rules, NO_WIDTH),
+            "Then run the `coder login` command to sign in.\n",
+            "Then run the\n`coder login` command to sign in.\n",
+        );
+    }
+
+    /// A break must not leave "[label]: word" alone on a paragraph's first
+    /// line, where Markdown would read it as a link reference definition.
+    #[test]
+    fn no_accidental_reference_definitions() {
+        let rules = SembrRules {
+            links: Level::Always,
+            ..SembrRules::default()
+        };
+        assert_formats(
+            &with(rules, NO_WIDTH),
+            "* [`tonic`]: A [gRPC library][grpc] built on top of\n  [`hyper`].\n\n[`tonic`]: https://x/t\n[grpc]: https://x/g\n[`hyper`]: https://x/h\n",
+            "* [`tonic`]: A [gRPC library][grpc]\n  built on top of [`hyper`].\n\n[`tonic`]: https://x/t\n[grpc]: https://x/g\n[`hyper`]: https://x/h\n",
+        );
+    }
+
+    /// Rule 13: a line may exceed the width when nothing allows a break.
+    #[test]
+    fn width_level_rules_only_fire_on_long_lines() {
+        let rules = SembrRules {
+            links: Level::Width,
+            ..SembrRules::default()
+        };
+        let short = "See the [guide](https://example.com) now.\n";
+        assert_formats(&with(rules, 80), short, short);
+        assert_formats(
+            &with(rules, 40),
+            "Read the [install guide](https://example.com/install) before you start.\n",
+            "Read the\n[install guide](https://example.com/install)\nbefore you start.\n",
+        );
+    }
+}
+
+/// `style = "paragraph"`: one line per paragraph.
+#[test]
+fn paragraph_style_joins_every_line() {
+    use sember::Style;
+    let config = Config {
+        style: Style::Paragraph,
+        ..Config::default()
+    };
+    let src = "One sentence.\nAnother,\nwrapped mid\nphrase.\n\n- A list. Item\n  here.\n\nA hard break  \nstays. And\n:::tip\nfences stay.\n:::\n";
+    let expected = "One sentence. Another, wrapped mid phrase.\n\n- A list. Item here.\n\nA hard break  \nstays. And\n:::tip\nfences stay.\n:::\n";
+    let formatted = format_markdown(src, &config);
+    assert_eq!(formatted.output, expected);
+    assert_eq!(format_markdown(expected, &config).output, expected);
 }
