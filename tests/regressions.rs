@@ -363,3 +363,31 @@ fn paragraph_style_joins_every_line() {
     assert_eq!(formatted.output, expected);
     assert_eq!(format_markdown(expected, &config).output, expected);
 }
+
+mod changed_lines {
+    use sember::{Config, format_markdown_lines};
+
+    const SRC: &str = "One. Two\nthree.\n\nFour. Five\nsix.\n\n- Seven. Eight\n  nine.\n";
+
+    fn fmt(lines: &[std::ops::RangeInclusive<usize>]) -> String {
+        format_markdown_lines(SRC, &Config::default(), lines).output
+    }
+
+    #[test]
+    fn formats_only_paragraphs_touching_the_lines() {
+        assert_eq!(fmt(&[]), SRC);
+        assert_eq!(
+            fmt(&[5..=5]),
+            "One. Two\nthree.\n\nFour.\nFive six.\n\n- Seven. Eight\n  nine.\n"
+        );
+        assert_eq!(
+            fmt(&[1..=1, 8..=8]),
+            "One.\nTwo three.\n\nFour. Five\nsix.\n\n- Seven.\n  Eight nine.\n"
+        );
+    }
+
+    #[test]
+    fn blank_lines_between_paragraphs_touch_nothing() {
+        assert_eq!(fmt(&[3..=3, 6..=6]), SRC);
+    }
+}

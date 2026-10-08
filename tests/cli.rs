@@ -270,3 +270,123 @@ mod config {
         assert_eq!(content, SRC);
     }
 }
+
+mod changed {
+    use std::fs;
+    use std::path::Path;
+    use std::process::Command;
+
+    use super::sember;
+
+    const TWO: &str = "First one. First\ntwo.\n\nSecond one. Second\ntwo.\n";
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// A repository with `a.md` and `b.md` committed as `TWO`.
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q"]);
+        fs::write(dir.path().join("a.md"), TWO).unwrap();
+        fs::write(dir.path().join("b.md"), TWO).unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", "init"]);
+        dir
+    }
+
+    fn read(dir: &Path, name: &str) -> String {
+        fs::read_to_string(dir.join(name)).unwrap()
+    }
+
+    #[test]
+    fn formats_only_changed_paragraphs() {
+        let dir = repo();
+        fs::write(
+            dir.path().join("a.md"),
+            "First one. First\ntwo.\n\nSecond one. Second\nthree.\n",
+        )
+        .unwrap();
+        let out = sember(&["--changed", "HEAD", "a.md", "b.md"], dir.path(), None);
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(
+            read(dir.path(), "a.md"),
+            "First one. First\ntwo.\n\nSecond one.\nSecond three.\n"
+        );
+        assert_eq!(read(dir.path(), "b.md"), TWO);
+    }
+
+    #[test]
+    fn a_deletion_counts_as_a_change_to_its_paragraph() {
+        let dir = repo();
+        fs::write(
+            dir.path().join("a.md"),
+            "First one. First\ntwo.\n\nSecond one. Second\n",
+        )
+        .unwrap();
+        let out = sember(&["--changed", "HEAD", "a.md"], dir.path(), None);
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(
+            read(dir.path(), "a.md"),
+            "First one. First\ntwo.\n\nSecond one.\nSecond\n"
+        );
+    }
+
+    #[test]
+    fn without_paths_formats_changed_and_untracked_files() {
+        let dir = repo();
+        fs::write(
+            dir.path().join("a.md"),
+            "First one. First\nthree.\n\nSecond one. Second\ntwo.\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("docs")).unwrap();
+        fs::write(dir.path().join("docs/new.md"), TWO).unwrap();
+        fs::write(dir.path().join("notes.txt"), TWO).unwrap();
+
+        let out = sember(&["--check", "--changed", "HEAD"], dir.path(), None);
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(stderr.contains("would reformat a.md"), "{stderr}");
+        assert!(stderr.contains("would reformat docs/new.md"), "{stderr}");
+        assert!(stderr.contains("2 files would be reformatted"), "{stderr}");
+
+        let out = sember(&["--changed", "HEAD"], dir.path(), None);
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(
+            read(dir.path(), "a.md"),
+            "First one.\nFirst three.\n\nSecond one. Second\ntwo.\n"
+        );
+        assert_eq!(
+            read(dir.path(), "docs/new.md"),
+            "First one.\nFirst two.\n\nSecond one.\nSecond two.\n"
+        );
+        assert_eq!(read(dir.path(), "b.md"), TWO);
+        assert_eq!(read(dir.path(), "notes.txt"), TWO);
+    }
+
+    #[test]
+    fn unknown_ref_is_an_error() {
+        let dir = repo();
+        let out = sember(&["--changed", "no-such-branch"], dir.path(), None);
+        assert_eq!(out.status.code(), Some(2));
+        assert!(
+            String::from_utf8(out.stderr)
+                .unwrap()
+                .contains("`no-such-branch` is not a commit")
+        );
+    }
+
+    #[test]
+    fn stdin_is_an_error() {
+        let dir = repo();
+        let out = sember(&["--changed", "HEAD", "-"], dir.path(), Some(TWO));
+        assert_eq!(out.status.code(), Some(2));
+    }
+}
