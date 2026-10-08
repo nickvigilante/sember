@@ -5,7 +5,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
 use sember::Config;
-use sember::config::{ConfigFile, Discovery, ExistingName, Partial, StyleName};
+use std::rc::Rc;
+
+use sember::config::{ConfigFile, Discovery, ExistingName, Partial, StyleName, builtin_format};
 
 /// Put each sentence of your Markdown on its own line.
 ///
@@ -88,36 +90,74 @@ impl Cli {
 /// Where each file's settings come from.
 enum Settings {
     None,
-    Fixed(ConfigFile),
+    Fixed(Rc<ConfigFile>),
     Discover(Discovery),
 }
 
 impl Settings {
-    /// The config for one input: defaults, then the config file (top-level
-    /// settings and matching overrides), then the command-line flags.
-    fn for_path(&mut self, path: &Path, flags: &Partial) -> Result<Config, String> {
-        let mut config = Config::default();
-        let absolute = if path == Path::new("-") {
-            std::env::current_dir().map_err(|e| e.to_string())?
-        } else {
-            std::path::absolute(path).map_err(|e| e.to_string())?
-        };
+    /// The config file that governs `path`, if any.
+    fn file_for(&mut self, path: &Path) -> Result<Option<Rc<ConfigFile>>, String> {
         match self {
-            Settings::None => {}
-            Settings::Fixed(file) => file.apply(&absolute, &mut config),
+            Settings::None => Ok(None),
+            Settings::Fixed(file) => Ok(Some(file.clone())),
             Settings::Discover(discovery) => {
+                let absolute = absolute(path)?;
                 let dir = if path == Path::new("-") {
                     absolute.as_path()
                 } else {
                     absolute.parent().unwrap_or(Path::new("/"))
                 };
-                if let Some(file) = discovery.find(dir).map_err(|e| e.to_string())? {
-                    file.apply(&absolute, &mut config);
-                }
+                discovery.find(dir).map_err(|e| e.to_string())
             }
+        }
+    }
+
+    /// The config for one input: defaults, then the config file (top-level
+    /// settings and matching sections), then the command-line flags.
+    fn for_path(&mut self, path: &Path, flags: &Partial) -> Result<Config, String> {
+        let mut config = Config::default();
+        if let Some(file) = self.file_for(path)? {
+            file.apply(&absolute(path)?, &mut config);
         }
         flags.apply(&mut config);
         Ok(config)
+    }
+
+    /// Whether to format `path`: `Ok(false)` when it's excluded or (found
+    /// by walking a directory) isn't a format sember knows.
+    fn wants(&mut self, path: &Path, explicit: bool) -> Result<bool, String> {
+        let file = self.file_for(path)?;
+        let absolute = absolute(path)?;
+        if file
+            .as_ref()
+            .is_some_and(|file| file.is_excluded(&absolute))
+        {
+            return Ok(false);
+        }
+        let format = match &file {
+            Some(file) => file.format_of(path),
+            None => builtin_format(path),
+        };
+        match (format, explicit) {
+            (Some(_), _) => Ok(true),
+            (None, false) => Ok(false),
+            // A missing file is reported when it's read.
+            (None, true) if !path.exists() => Ok(true),
+            (None, true) => Err(match path.extension().and_then(|ext| ext.to_str()) {
+                Some(ext) => format!(
+                    "unrecognized extension `.{ext}`; map it to a format in .sember.toml, e.g. [formats] {ext} = \"md\""
+                ),
+                None => "no file extension, so the format is unknown".to_owned(),
+            }),
+        }
+    }
+}
+
+fn absolute(path: &Path) -> Result<PathBuf, String> {
+    if path == Path::new("-") {
+        std::env::current_dir().map_err(|e| e.to_string())
+    } else {
+        std::path::absolute(path).map_err(|e| e.to_string())
     }
 }
 
@@ -133,7 +173,7 @@ fn main() -> ExitCode {
             .map_err(|e| format!("{}: {e}", path.display()))
             .and_then(|path| ConfigFile::load(&path).map_err(|e| e.to_string()))
         {
-            Ok(file) => Settings::Fixed(file),
+            Ok(file) => Settings::Fixed(Rc::new(file)),
             Err(err) => {
                 eprintln!("sember: {err}");
                 return ExitCode::from(2);
@@ -151,7 +191,7 @@ fn main() -> ExitCode {
     let mut files = Vec::new();
     let mut failed = false;
     for path in &paths {
-        if let Err(err) = collect(path, &mut files) {
+        if let Err(err) = collect(path, true, &mut settings, &mut files) {
             eprintln!("sember: {}: {err}", path.display());
             failed = true;
         }
@@ -203,27 +243,39 @@ fn display(path: &Path) -> String {
     }
 }
 
-/// Expands directories into the Markdown files beneath them, sorted so the
-/// output order is stable.
-fn collect(path: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
-    if path == Path::new("-") || !path.is_dir() {
+/// Expands directories into the files beneath them that sember formats,
+/// sorted so the output order is stable. Excluded files are skipped, even
+/// when named explicitly, so a pre-commit hook passing every changed file
+/// honours `exclude`.
+fn collect(
+    path: &Path,
+    explicit: bool,
+    settings: &mut Settings,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if path == Path::new("-") {
         files.push(path.to_owned());
         return Ok(());
     }
-    let mut entries: Vec<_> = fs::read_dir(path)?.collect::<Result<_, _>>()?;
+    if !path.is_dir() {
+        if settings.wants(path, explicit)? {
+            files.push(path.to_owned());
+        }
+        return Ok(());
+    }
+    let mut entries: Vec<_> = fs::read_dir(path)
+        .and_then(|dir| dir.collect::<Result<_, _>>())
+        .map_err(|e| e.to_string())?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
         let child = entry.path();
-        let name = entry.file_name();
-        if entry.file_type()?.is_dir() {
-            if !SKIP_DIRS.iter().any(|skip| name == *skip) {
-                collect(&child, files)?;
+        let is_dir = entry.file_type().map_err(|e| e.to_string())?.is_dir();
+        if is_dir {
+            if !SKIP_DIRS.iter().any(|skip| entry.file_name() == *skip) {
+                collect(&child, false, settings, files)?;
             }
-        } else if child
-            .extension()
-            .is_some_and(|ext| ext == "md" || ext == "markdown")
-        {
-            files.push(child);
+        } else {
+            collect(&child, false, settings, files)?;
         }
     }
     Ok(())

@@ -159,11 +159,11 @@ mod config {
     }
 
     #[test]
-    fn overrides_match_paths_relative_to_the_config() {
+    fn glob_sections_match_paths_relative_to_the_config() {
         let dir = repo();
         fs::write(
             dir.path().join(".sember.toml"),
-            "[[override]]\npaths = [\"docs/**\"]\nstyle = \"sembr\"\n",
+            "[\"docs/**\"]\nstyle = \"sembr\"\n",
         )
         .unwrap();
         assert_eq!(
@@ -208,6 +208,57 @@ mod config {
         let inner = outer.path().join("project");
         fs::create_dir_all(inner.join(".git")).unwrap();
         assert_eq!(format_file(&inner, "a.md", &[]), (Some(0), SENTENCE.into()));
+    }
+
+    #[test]
+    fn formats_map_extensions_for_directories_and_files() {
+        let dir = repo();
+        fs::write(
+            dir.path().join(".sember.toml"),
+            "[formats]\nqmd = \"md\"\nmdx = \"md\"\n",
+        )
+        .unwrap();
+        for name in ["docs/a.qmd", "docs/b.mdx", "docs/c.txt"] {
+            let path = dir.path().join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, SRC).unwrap();
+        }
+        let out = sember(&["docs"], dir.path(), None);
+        assert!(out.status.success(), "{out:?}");
+        let read = |name: &str| fs::read_to_string(dir.path().join(name)).unwrap();
+        assert_eq!(read("docs/a.qmd"), SENTENCE);
+        assert_eq!(read("docs/b.mdx"), SENTENCE);
+        assert_eq!(read("docs/c.txt"), SRC);
+    }
+
+    #[test]
+    fn unmapped_extension_named_explicitly_is_an_error() {
+        let dir = repo();
+        let (code, content) = format_file(dir.path(), "a.qmd", &[]);
+        assert_eq!(code, Some(2));
+        assert_eq!(content, SRC);
+    }
+
+    #[test]
+    fn exclude_skips_files_even_when_named() {
+        let dir = repo();
+        fs::write(
+            dir.path().join(".sember.toml"),
+            "exclude = [\"CHANGELOG.md\", \"vendor/**\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            format_file(dir.path(), "CHANGELOG.md", &[]),
+            (Some(0), SRC.into())
+        );
+        assert_eq!(
+            format_file(dir.path(), "vendor/lib/README.md", &[]),
+            (Some(0), SRC.into())
+        );
+        assert_eq!(
+            format_file(dir.path(), "docs/a.md", &[]),
+            (Some(0), SENTENCE.into())
+        );
     }
 
     #[test]
