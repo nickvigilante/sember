@@ -20,10 +20,29 @@ In the `sembr` style:
   `auto` (the default) keeps breaks that follow punctuation, so a person's deliberate breaks survive, but reflows any paragraph that breaks mid-phrase, since it was hard-wrapped to a width.
   `keep` always keeps breaks that follow punctuation, and `reflow` ignores existing breaks.
 
+## Configuration
+
+Put a `.sember.toml` in your repository so every run, pre-commit hook and CI job uses the same standard:
+
+```toml
+style = "sembr"            # "sentence" (default) or "sembr"
+width = 80                 # sembr: clause breaks only on longer lines (0 = always)
+existing-breaks = "auto"   # sembr: "auto" (default), "keep" or "reflow"
+
+[[override]]               # later overrides win
+paths = ["docs/legacy/**"] # globs relative to this file
+existing-breaks = "reflow"
+```
+
+For each file, sember uses the nearest `.sember.toml` in its directory or a parent, stopping at the repository root (the directory with `.git`).
+Settings are applied in order: the defaults, the file's top-level settings, each matching `[[override]]`, and then any command-line flags.
+`--config PATH` uses one file for every input instead, and `--no-config` ignores config files.
+Unknown keys and values are errors, so a typo can't silently fall back to the defaults.
+
 ## Status
 
 Early.
-Per-path configuration and formatting only the paragraphs changed since a git ref are planned.
+Formatting only the paragraphs changed since a git ref is planned.
 
 ## What it guarantees
 

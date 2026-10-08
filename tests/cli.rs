@@ -106,3 +106,116 @@ fn sembr_style_flag() {
         "If the build fails,\nthe logs are kept.\n"
     );
 }
+
+mod config {
+    use std::fs;
+
+    use super::sember;
+
+    const SRC: &str = "If the build fails, the logs are kept. Then\nit retries.\n";
+    const SENTENCE: &str = "If the build fails, the logs are kept.\nThen it retries.\n";
+    const SEMBR: &str = "If the build fails,\nthe logs are kept.\nThen it retries.\n";
+
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        dir
+    }
+
+    fn format_file(dir: &std::path::Path, rel: &str, args: &[&str]) -> (Option<i32>, String) {
+        let path = dir.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, SRC).unwrap();
+        let mut all = args.to_vec();
+        all.push(rel);
+        let out = sember(&all, dir, None);
+        (out.status.code(), fs::read_to_string(&path).unwrap())
+    }
+
+    #[test]
+    fn uses_the_repo_config() {
+        let dir = repo();
+        fs::write(dir.path().join(".sember.toml"), "style = \"sembr\"\n").unwrap();
+        assert_eq!(
+            format_file(dir.path(), "docs/a.md", &[]),
+            (Some(0), SEMBR.into())
+        );
+    }
+
+    #[test]
+    fn nearest_config_wins() {
+        let dir = repo();
+        fs::write(dir.path().join(".sember.toml"), "style = \"sembr\"\n").unwrap();
+        fs::create_dir_all(dir.path().join("docs")).unwrap();
+        fs::write(
+            dir.path().join("docs/.sember.toml"),
+            "style = \"sentence\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            format_file(dir.path(), "docs/a.md", &[]),
+            (Some(0), SENTENCE.into())
+        );
+    }
+
+    #[test]
+    fn overrides_match_paths_relative_to_the_config() {
+        let dir = repo();
+        fs::write(
+            dir.path().join(".sember.toml"),
+            "[[override]]\npaths = [\"docs/**\"]\nstyle = \"sembr\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            format_file(dir.path(), "docs/a.md", &[]),
+            (Some(0), SEMBR.into())
+        );
+        assert_eq!(
+            format_file(dir.path(), "notes.md", &[]),
+            (Some(0), SENTENCE.into())
+        );
+    }
+
+    #[test]
+    fn flags_override_the_config() {
+        let dir = repo();
+        fs::write(dir.path().join(".sember.toml"), "style = \"sembr\"\n").unwrap();
+        assert_eq!(
+            format_file(dir.path(), "a.md", &["--style", "sentence"]),
+            (Some(0), SENTENCE.into())
+        );
+    }
+
+    #[test]
+    fn no_config_and_explicit_config() {
+        let dir = repo();
+        fs::write(dir.path().join(".sember.toml"), "style = \"sembr\"\n").unwrap();
+        assert_eq!(
+            format_file(dir.path(), "a.md", &["--no-config"]),
+            (Some(0), SENTENCE.into())
+        );
+        fs::write(dir.path().join("other.toml"), "style = \"sentence\"\n").unwrap();
+        assert_eq!(
+            format_file(dir.path(), "a.md", &["--config", "other.toml"]),
+            (Some(0), SENTENCE.into())
+        );
+    }
+
+    #[test]
+    fn stops_at_the_repository_root() {
+        let outer = tempfile::tempdir().unwrap();
+        fs::write(outer.path().join(".sember.toml"), "style = \"sembr\"\n").unwrap();
+        let inner = outer.path().join("project");
+        fs::create_dir_all(inner.join(".git")).unwrap();
+        assert_eq!(format_file(&inner, "a.md", &[]), (Some(0), SENTENCE.into()));
+    }
+
+    #[test]
+    fn invalid_config_is_an_error_and_writes_nothing() {
+        let dir = repo();
+        fs::write(dir.path().join(".sember.toml"), "stlye = \"sembr\"\n").unwrap();
+        let (code, content) = format_file(dir.path(), "a.md", &[]);
+        assert_eq!(code, Some(2));
+        assert_eq!(content, SRC);
+    }
+}
