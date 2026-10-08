@@ -1,0 +1,22 @@
+[package]
+name = "sember"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Semantic line breaks for cleaner text and smaller, more manageable diffs."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nickvigilante/sember"
+readme = "README.md"
+keywords = ["markdown", "formatter", "sembr", "cli"]
+categories = ["command-line-utilities", "text-processing"]
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+pulldown-cmark = { version = "0.13.4", default-features = false }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
