@@ -6,11 +6,24 @@ sember rewrites Markdown so that each sentence sits on its own source line.
 Hard-wrapped paragraphs are unwrapped, and long lines holding several sentences are split.
 The rendered page doesn't change, because Markdown joins the lines of a paragraph back together, but a diff now shows exactly which sentence changed.
 
+## Styles
+
+- **`--style sentence`** (the default) puts one sentence per line and never splits a sentence.
+- **`--style sembr`** also breaks at clause boundaries: after `;`, `:` and dashes, before a conjunction or a word like "which" or "because" that follows a comma, and after an opening "If…," or "When…" clause.
+  Series ("A, B, or C"), abbreviations ("e.g.,") and asides in parentheses stay on one line, and a break never strands a single word.
+
+In the `sembr` style:
+
+- `--width N` adds clause breaks only to lines longer than N characters, at the last clause boundary that fits.
+  A line with no clause boundary stays long rather than breaking mid-phrase.
+- `--existing-breaks` decides what happens to line breaks already in a paragraph.
+  `auto` (the default) keeps breaks that follow punctuation, so a person's deliberate breaks survive, but reflows any paragraph that breaks mid-phrase, since it was hard-wrapped to a width.
+  `keep` always keeps breaks that follow punctuation, and `reflow` ignores existing breaks.
+
 ## Status
 
 Early.
-Today sember does one-sentence-per-line for CommonMark and GitHub-flavored Markdown.
-Clause-level breaks, a width limit, per-path configuration and formatting only the paragraphs changed since a git ref are planned.
+Per-path configuration and formatting only the paragraphs changed since a git ref are planned.
 
 ## What it guarantees
 
@@ -39,6 +52,9 @@ sember --check docs/
 
 # Read stdin, write stdout.
 sember < draft.md > draft.sembr.md
+
+# Clause breaks too, only where a line is over 80 characters.
+sember --style sembr --width 80 docs/
 ```
 
 Exit status is 0 on success, 1 when `--check` finds files to reformat, and 2 on errors such as an unreadable file.

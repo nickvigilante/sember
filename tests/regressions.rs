@@ -1,13 +1,17 @@
 //! Cases other semantic-line-break formatters get wrong. Each one checks the
 //! exact output and that a second pass changes nothing.
 
-use sember::format_markdown;
+use sember::{Config, format_markdown};
 
 fn assert_formats(src: &str, expected: &str) {
-    let formatted = format_markdown(src);
+    let formatted = format_markdown(src, &Config::default());
     assert_eq!(formatted.output, expected);
     assert!(formatted.kept.is_empty(), "kept: {:?}", formatted.kept);
-    assert_eq!(format_markdown(expected).output, expected, "not idempotent");
+    assert_eq!(
+        format_markdown(expected, &Config::default()).output,
+        expected,
+        "not idempotent"
+    );
 }
 
 /// A code block followed by more text inside the same list item must not
@@ -81,4 +85,102 @@ fn wrapped_reference_label() {
         "See the *[Using\nderive]* page. Next.\n\n[Using derive]: https://serde.rs/derive.html\n",
         "See the *[Using derive]* page.\nNext.\n\n[Using derive]: https://serde.rs/derive.html\n",
     );
+}
+
+mod sembr {
+    use sember::{Config, ExistingBreaks, Style, format_markdown};
+
+    fn sembr(width: usize, existing_breaks: ExistingBreaks) -> Config {
+        Config {
+            style: Style::Sembr,
+            width,
+            existing_breaks,
+        }
+    }
+
+    fn assert_formats(config: &Config, src: &str, expected: &str) {
+        let formatted = format_markdown(src, config);
+        assert_eq!(formatted.output, expected);
+        assert!(formatted.kept.is_empty(), "kept: {:?}", formatted.kept);
+        assert_eq!(
+            format_markdown(expected, config).output,
+            expected,
+            "not idempotent"
+        );
+    }
+
+    /// Breaks a person placed after punctuation survive, even ones sember
+    /// wouldn't have added itself.
+    #[test]
+    fn keeps_deliberate_breaks() {
+        let src = "Run the job nightly,\nthen prune old snapshots,\nand alert on failure.\n";
+        assert_formats(&sembr(0, ExistingBreaks::Auto), src, src);
+    }
+
+    /// A hard-wrapped paragraph is unwrapped and re-broken at clauses.
+    #[test]
+    fn reflows_hard_wrapped_paragraphs() {
+        assert_formats(
+            &sembr(0, ExistingBreaks::Auto),
+            "If the build fails, the logs are kept so you can see which\nresource caused the problem, and the next build starts clean.\n",
+            "If the build fails,\nthe logs are kept so you can see which resource caused the problem,\nand the next build starts clean.\n",
+        );
+    }
+
+    /// `reflow` ignores even punctuated breaks.
+    #[test]
+    fn reflow_ignores_existing_breaks() {
+        assert_formats(
+            &sembr(0, ExistingBreaks::Reflow),
+            "Run the job nightly,\nthen prune old snapshots.\n",
+            "Run the job nightly, then prune old snapshots.\n",
+        );
+    }
+
+    /// With a width, clause breaks are added only where a line is too long,
+    /// at the last clause boundary that fits, and never mid-phrase.
+    #[test]
+    fn width_picks_the_last_fitting_clause() {
+        let config = sembr(50, ExistingBreaks::Auto);
+        assert_formats(
+            &config,
+            "Short line, and it stays.\n",
+            "Short line, and it stays.\n",
+        );
+        assert_formats(
+            &config,
+            "The logs are kept, which helps, and the next build starts clean.\n",
+            "The logs are kept, which helps,\nand the next build starts clean.\n",
+        );
+        let unbreakable =
+            "This sentence has no clause boundary anywhere along its considerable length.\n";
+        assert_formats(&config, unbreakable, unbreakable);
+    }
+
+    /// Series and abbreviations stay together in the sembr style too.
+    #[test]
+    fn series_stay_together() {
+        let src = "The answer is A, B, or C, e.g., depending on the input.\n";
+        assert_formats(&sembr(0, ExistingBreaks::Auto), src, src);
+    }
+
+    /// Words ending in multi-byte characters before a comma.
+    #[test]
+    fn non_ascii_before_comma() {
+        assert_formats(
+            &sembr(0, ExistingBreaks::Auto),
+            "We met in Kyōto, and the trip went well. Café, then bistrō.\n",
+            "We met in Kyōto,\nand the trip went well.\nCafé, then bistrō.\n",
+        );
+    }
+
+    /// Clause breaks in containers get the right prefix.
+    #[test]
+    fn clause_breaks_in_lists() {
+        assert_formats(
+            &sembr(0, ExistingBreaks::Auto),
+            "- If the build fails, the logs are kept.\n",
+            "- If the build fails,\n  the logs are kept.\n",
+        );
+    }
 }
