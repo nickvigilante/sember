@@ -3,7 +3,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
+use sember::{Config, ExistingBreaks, Style};
 
 /// Put each sentence of your Markdown on its own line.
 ///
@@ -19,12 +20,62 @@ struct Cli {
     /// Don't write anything; exit with status 1 if any file would change.
     #[arg(long)]
     check: bool,
+
+    /// How to break lines.
+    #[arg(long, value_enum, default_value_t = StyleArg::Sentence)]
+    style: StyleArg,
+
+    /// With `--style sembr`, add clause breaks only to lines longer than
+    /// this many characters. 0 breaks at every clause boundary.
+    #[arg(long, default_value_t = 0, value_name = "CHARS")]
+    width: usize,
+
+    /// With `--style sembr`, what to do with line breaks already in a
+    /// paragraph.
+    #[arg(long, value_enum, default_value_t = ExistingArg::Auto)]
+    existing_breaks: ExistingArg,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum StyleArg {
+    /// One sentence per line; sentences are never split.
+    Sentence,
+    /// Semantic line breaks: sentences plus clause boundaries.
+    Sembr,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ExistingArg {
+    /// Keep clause breaks unless the paragraph is hard-wrapped.
+    Auto,
+    /// Keep every existing break on a clause boundary.
+    Keep,
+    /// Ignore existing breaks.
+    Reflow,
+}
+
+impl Cli {
+    fn config(&self) -> Config {
+        Config {
+            style: match self.style {
+                StyleArg::Sentence => Style::Sentence,
+                StyleArg::Sembr => Style::Sembr,
+            },
+            width: self.width,
+            existing_breaks: match self.existing_breaks {
+                ExistingArg::Auto => ExistingBreaks::Auto,
+                ExistingArg::Keep => ExistingBreaks::Keep,
+                ExistingArg::Reflow => ExistingBreaks::Reflow,
+            },
+        }
+    }
 }
 
 const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target"];
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let config = cli.config();
     let paths = if cli.paths.is_empty() {
         vec![PathBuf::from("-")]
     } else {
@@ -42,7 +93,7 @@ fn main() -> ExitCode {
 
     let mut would_change = Vec::new();
     for file in &files {
-        match run(file, cli.check) {
+        match run(file, cli.check, &config) {
             Ok(true) => would_change.push(file),
             Ok(false) => {}
             Err(err) => {
@@ -106,7 +157,7 @@ fn collect(path: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
 
 /// Formats one file. Returns whether its contents changed (or would, under
 /// `--check`).
-fn run(path: &Path, check: bool) -> io::Result<bool> {
+fn run(path: &Path, check: bool, config: &Config) -> io::Result<bool> {
     let stdin = path == Path::new("-");
     let src = if stdin {
         let mut buf = String::new();
@@ -116,7 +167,7 @@ fn run(path: &Path, check: bool) -> io::Result<bool> {
         fs::read_to_string(path)?
     };
 
-    let formatted = sember::format_markdown(&src);
+    let formatted = sember::format_markdown(&src, config);
     for line in &formatted.kept {
         eprintln!(
             "{}:{line}: left as is: reformatting this paragraph would change how it renders",

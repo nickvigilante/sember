@@ -38,11 +38,45 @@ pub struct Formatted {
     pub kept: Vec<usize>,
 }
 
-/// Puts each sentence on its own line, joining lines that were wrapped
-/// mid-sentence, and leaves everything outside paragraph prose untouched.
-pub fn format(src: &str) -> Formatted {
+/// How sember breaks lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Style {
+    /// One sentence per line; a sentence is never split.
+    #[default]
+    Sentence,
+    /// Semantic line breaks: sentences, plus clause boundaries.
+    Sembr,
+}
+
+/// What to do with line breaks already in a paragraph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExistingBreaks {
+    /// Keep clause breaks, unless the paragraph also breaks mid-clause,
+    /// which means it was hard-wrapped and is reflowed.
+    #[default]
+    Auto,
+    /// Keep every existing break that falls on a clause boundary.
+    Keep,
+    /// Ignore existing breaks and break from scratch.
+    Reflow,
+}
+
+/// Formatting options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Config {
+    pub style: Style,
+    /// In the `sembr` style, only add clause breaks to lines longer than
+    /// this many characters. 0 breaks at every clause boundary.
+    pub width: usize,
+    /// In the `sembr` style, whether to keep clause breaks already there.
+    pub existing_breaks: ExistingBreaks,
+}
+
+/// Rewrites the line breaks in a document's paragraph prose and leaves
+/// everything else untouched.
+pub fn format(src: &str, config: &Config) -> Formatted {
     let runs = collect_runs(src);
-    let edits: Vec<Vec<Edit>> = runs.iter().map(|run| sentence_edits(src, run)).collect();
+    let edits: Vec<Vec<Edit>> = runs.iter().map(|run| run_edits(src, run, config)).collect();
     let all: Vec<&Edit> = edits.iter().flatten().collect();
     if all.is_empty() {
         return Formatted {
@@ -133,6 +167,9 @@ enum Piece {
         range: Range<usize>,
         breakable: bool,
     },
+    /// A hard line break (`\` or two trailing spaces). Always kept; a new
+    /// line starts after it.
+    Hard { range: Range<usize> },
 }
 
 #[derive(Debug, Clone)]
@@ -252,11 +289,15 @@ fn collect_runs(src: &str) -> Vec<Run> {
                 breakable,
             });
         }
-        if let Event::Text(_) = event {
-            run.pieces.push(Piece::Text {
+        match event {
+            Event::Text(_) => run.pieces.push(Piece::Text {
                 range: range.clone(),
                 breakable: link_depth == 0,
-            });
+            }),
+            Event::HardBreak => run.pieces.push(Piece::Hard {
+                range: range.clone(),
+            }),
+            _ => {}
         }
         run.end = run.end.max(range.end);
         last_end = range.end;
@@ -268,7 +309,11 @@ fn collect_runs(src: &str) -> Vec<Run> {
         }
     }
     finish(&mut current, &mut runs);
-    runs.retain(|run| !run.pieces.is_empty());
+    runs.retain(|run| {
+        run.pieces
+            .iter()
+            .any(|piece| !matches!(piece, Piece::Hard { .. }))
+    });
     runs
 }
 
@@ -286,31 +331,80 @@ fn continuation_prefix(src: &str, run: &Run) -> String {
         .collect()
 }
 
-fn sentence_edits(src: &str, run: &Run) -> Vec<Edit> {
-    let prefix = continuation_prefix(src, run);
-    let newline = format!("\n{prefix}");
-    let mut edits = Vec::new();
-    let break_at = |range: Range<usize>, breakable: bool, edits: &mut Vec<Edit>| -> bool {
+/// A place where the line may break: a soft break in the source, or a run
+/// of spaces inside text.
+#[derive(Debug)]
+struct Slot {
+    range: Range<usize>,
+    /// The source already breaks the line here.
+    existing: bool,
+    kind: Kind,
+    /// The text before the slot ends with clause punctuation (`,` `;` `:`
+    /// or a dash). An existing break here can be a deliberate one even when
+    /// sember wouldn't add it.
+    punctuated: bool,
+    /// Character offset of the slot in the run with every slot as one space,
+    /// used for measuring line widths.
+    column: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// Ends a sentence: always a line break.
+    Sentence,
+    /// Ends a clause: a break in the `sembr` style.
+    Clause,
+    /// Mid-clause, or inside a link: never a break.
+    None,
+    /// A hard break in the source: always kept.
+    Hard,
+}
+
+fn slots(src: &str, run: &Run, config: &Config) -> Vec<Slot> {
+    let mut slots = Vec::new();
+    let mut clause_start = run.start;
+    let mut column = 0;
+    let mut cursor = run.start;
+    let mut push = |range: Range<usize>, existing: bool, breakable: bool, slots: &mut Vec<Slot>| {
+        column += src[cursor..range.start].chars().count();
+        cursor = range.end;
         let before = &src[run.start..range.start];
         let after = &src[range.end..run.end];
-        let split = breakable && sentence::is_boundary(before, after) && !starts_block(after);
-        if split && src[range.clone()] != newline {
-            edits.push(Edit {
-                range,
-                replacement: newline.clone(),
-            });
-        }
-        split
+        let allowed = breakable && !starts_block(after);
+        let kind = if !allowed {
+            Kind::None
+        } else if sentence::is_boundary(before, after) {
+            clause_start = range.end;
+            Kind::Sentence
+        } else if config.style == Style::Sembr
+            && sentence::is_clause_boundary(&src[clause_start..range.start], after)
+        {
+            clause_start = range.end;
+            Kind::Clause
+        } else {
+            Kind::None
+        };
+        let punctuated = allowed
+            && before
+                .trim_end_matches(['*', '_', '"', '”', ')'])
+                .ends_with([',', ';', ':', '—', '–']);
+        slots.push(Slot {
+            range,
+            existing,
+            kind,
+            punctuated,
+            column,
+        });
+        column += 1;
     };
 
     for piece in &run.pieces {
         match piece {
-            Piece::Gap { range, breakable } => {
-                if !break_at(range.clone(), *breakable, &mut edits) {
-                    edits.push(Edit {
-                        range: range.clone(),
-                        replacement: " ".to_owned(),
-                    });
+            Piece::Gap { range, breakable } => push(range.clone(), true, *breakable, &mut slots),
+            Piece::Hard { range } => {
+                push(range.clone(), true, false, &mut slots);
+                if let Some(slot) = slots.last_mut() {
+                    slot.kind = Kind::Hard;
                 }
             }
             Piece::Text { range, breakable } => {
@@ -325,13 +419,126 @@ fn sentence_edits(src: &str, run: &Run) -> Vec<Edit> {
                         + text[start..]
                             .find(|c: char| c != ' ' && c != '\t')
                             .unwrap_or(text.len() - start);
-                    break_at(range.start + start..range.start + end, true, &mut edits);
+                    push(
+                        range.start + start..range.start + end,
+                        false,
+                        true,
+                        &mut slots,
+                    );
                     offset = end;
                 }
             }
         }
     }
+    slots
+}
+
+/// Decides which slots in a run become line breaks, and returns the edits.
+fn run_edits(src: &str, run: &Run, config: &Config) -> Vec<Edit> {
+    let prefix = continuation_prefix(src, run);
+    let newline = format!("\n{prefix}");
+    let slots = slots(src, run, config);
+    let total = slots.last().map_or(0, |slot| slot.column + 1)
+        + src[slots.last().map_or(run.start, |slot| slot.range.end)..run.end]
+            .chars()
+            .count();
+
+    // A paragraph with any existing break mid-phrase (no punctuation before
+    // it) was wrapped to a width, not by meaning, so none of its existing
+    // breaks are worth keeping.
+    let keep_existing = config.style == Style::Sembr
+        && match config.existing_breaks {
+            ExistingBreaks::Keep => true,
+            ExistingBreaks::Reflow => false,
+            ExistingBreaks::Auto => !slots
+                .iter()
+                .any(|slot| slot.existing && slot.kind == Kind::None && !slot.punctuated),
+        };
+
+    let mut breaks: Vec<bool> = slots
+        .iter()
+        .map(|slot| match slot.kind {
+            Kind::Sentence | Kind::Hard => true,
+            Kind::Clause | Kind::None => {
+                keep_existing && slot.existing && (slot.kind == Kind::Clause || slot.punctuated)
+            }
+        })
+        .collect();
+
+    if config.style == Style::Sembr {
+        if config.width == 0 {
+            for (slot, brk) in slots.iter().zip(breaks.iter_mut()) {
+                *brk |= slot.kind == Kind::Clause;
+            }
+        } else {
+            fit_to_width(
+                &slots,
+                &mut breaks,
+                total,
+                prefix.chars().count(),
+                config.width,
+            );
+        }
+    }
+
+    let mut edits = Vec::new();
+    for (slot, brk) in slots.iter().zip(breaks) {
+        if slot.kind == Kind::Hard {
+            continue;
+        }
+        let replacement = if brk {
+            newline.as_str()
+        } else if slot.existing {
+            " "
+        } else {
+            continue;
+        };
+        if src[slot.range.clone()] != *replacement {
+            edits.push(Edit {
+                range: slot.range.clone(),
+                replacement: replacement.to_owned(),
+            });
+        }
+    }
     edits
+}
+
+/// Within each line already fixed by sentence or kept breaks, adds clause
+/// breaks until the line fits in `width` characters: the latest clause
+/// boundary that fits, or the earliest one past the limit if none does.
+/// Lines with no clause boundary stay long rather than breaking mid-phrase.
+fn fit_to_width(slots: &[Slot], breaks: &mut [bool], total: usize, indent: usize, width: usize) {
+    let mut line_start = 0;
+    let mut i = 0;
+    while i <= slots.len() {
+        // The next fixed break (or the end of the run) closes this line.
+        let next_fixed = (i..slots.len()).find(|&j| breaks[j]);
+        let line_end = next_fixed.map_or(total, |j| slots[j].column);
+        let candidates: Vec<usize> = (i..next_fixed.unwrap_or(slots.len()))
+            .filter(|&j| slots[j].kind == Kind::Clause)
+            .collect();
+        let mut start = line_start;
+        let mut remaining = candidates.as_slice();
+        while indent + line_end - start > width {
+            let fits = remaining
+                .iter()
+                .rposition(|&j| indent + slots[j].column - start <= width);
+            let Some(pick) = fits.or(if remaining.is_empty() { None } else { Some(0) }) else {
+                break;
+            };
+            let j = remaining[pick];
+            breaks[j] = true;
+            start = slots[j].column + 1;
+            remaining = &remaining[pick + 1..];
+        }
+        match next_fixed {
+            Some(j) => {
+                line_start = slots[j].column + 1;
+                i = j + 1;
+            }
+            None => break,
+        }
+    }
 }
 
 /// Whether a line starting with `text` could be read as the start of a new
@@ -437,10 +644,10 @@ fn line_number(src: &str, offset: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::format;
+    use super::{Config, format};
 
     fn fmt(src: &str) -> String {
-        format(src).output
+        format(src, &Config::default()).output
     }
 
     #[test]

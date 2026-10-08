@@ -91,3 +91,18 @@ fn missing_file_is_an_error() {
     let out = sember(&["nope.md"], dir.path(), None);
     assert_eq!(out.status.code(), Some(2));
 }
+
+#[test]
+fn sembr_style_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = sember(
+        &["--style", "sembr"],
+        dir.path(),
+        Some("If the build fails, the logs are kept.\n"),
+    );
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        "If the build fails,\nthe logs are kept.\n"
+    );
+}

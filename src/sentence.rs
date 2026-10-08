@@ -59,9 +59,12 @@ fn ends_sentence(before: &str) -> bool {
 
 /// `text` ends with a period; decide whether its last word is an
 /// abbreviation or an initial rather than a sentence end.
+/// Whether `text` ends with an abbreviation or initial ("e.g.", "Dr.",
+/// "J."). Text that doesn't end with a period never does.
 fn is_abbreviation(text: &str) -> bool {
-    let word = last_word(text);
-    let stem = &word[..word.len() - 1];
+    let Some(stem) = last_word(text).strip_suffix('.') else {
+        return false;
+    };
     if stem.is_empty() {
         // A lone "." after a space or an opener, as in "foo ." or "(.".
         return true;
@@ -97,9 +100,153 @@ fn starts_sentence(after: &str) -> bool {
         .is_some_and(|c| c.is_uppercase() || c.is_ascii_digit())
 }
 
+/// Coordinating conjunctions that start a new clause after a comma.
+const COORDINATORS: &[&str] = &["and", "but", "or", "nor", "so", "yet"];
+
+/// Words that open a subordinate or relative clause after a comma.
+const SUBORDINATORS: &[&str] = &[
+    "which", "who", "whom", "whose", "where", "when", "while", "whereas", "because", "although",
+    "though", "unless", "since", "if", "until", "after", "before", "once",
+];
+
+/// Words that open an introductory clause at the start of a sentence; the
+/// comma that closes it ("If the build fails, the logs are kept") is a
+/// clause boundary.
+const INTRODUCERS: &[&str] = &[
+    "if", "when", "whenever", "while", "although", "though", "because", "since", "after", "before",
+    "once", "unless", "until", "whether",
+];
+
+fn words(text: &str) -> impl Iterator<Item = &str> {
+    text.split_whitespace()
+        .filter(|word| word.chars().any(char::is_alphanumeric))
+}
+
+fn bare(word: &str) -> String {
+    word.trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase()
+}
+
+/// Reports whether a line may break between `before` and `after` at a
+/// clause boundary. `before` is the current clause up to the gap: the text
+/// since the last sentence or clause boundary.
+///
+/// Both sides must keep at least two words, so a break never strands a
+/// single word on a line.
+pub fn is_clause_boundary(before: &str, after: &str) -> bool {
+    let before_words: Vec<&str> = words(before).collect();
+    if before_words.len() < 2 || words(after).take(2).count() < 2 {
+        return false;
+    }
+    // Inside parentheses or brackets the aside stays on one line.
+    let depth = |open: char, close: char| {
+        before.chars().filter(|&c| c == open).count() as isize
+            - before.chars().filter(|&c| c == close).count() as isize
+    };
+    if depth('(', ')') > 0 || depth('[', ']') > 0 {
+        return false;
+    }
+
+    let trimmed = before.trim_end_matches(['*', '_', '"', '”', ')']);
+    let next = bare(after.split_whitespace().next().unwrap_or(""));
+    match trimmed.chars().next_back() {
+        Some(';') | Some('—') | Some('–') => true,
+        Some(':') => !after.starts_with(|c: char| c.is_ascii_digit()),
+        Some(',') => {
+            let last = before_words.last().copied().unwrap_or("");
+            if is_abbreviation(last.trim_end_matches(',')) {
+                return false;
+            }
+            // Another comma earlier in the same stretch means a series:
+            // "A, B, or C" stays on one line.
+            let earlier = &trimmed[..trimmed.len() - 1];
+            let in_series = earlier
+                .rsplit([';', ':'])
+                .next()
+                .is_some_and(|stretch| stretch.contains(','));
+            if COORDINATORS.contains(&next.as_str()) {
+                return !in_series;
+            }
+            if SUBORDINATORS.contains(&next.as_str()) {
+                return true;
+            }
+            // The first comma of a clause that opens with "If", "When"...,
+            // possibly after a conjunction ("and when a user logs in, the").
+            let mut opening = before_words.iter().map(|w| bare(w));
+            let first = opening
+                .find(|w| !COORDINATORS.contains(&w.as_str()))
+                .unwrap_or_default();
+            INTRODUCERS.contains(&first.as_str())
+                && !earlier.contains(',')
+                && before_words.len() >= 3
+        }
+        _ => before.ends_with(" --"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_boundary;
+    use super::{is_boundary, is_clause_boundary};
+
+    #[test]
+    fn clause_boundaries() {
+        assert!(is_clause_boundary(
+            "Run the job nightly;",
+            "then prune old snapshots."
+        ));
+        assert!(is_clause_boundary(
+            "Coder runs the template,",
+            "and the build starts."
+        ));
+        assert!(is_clause_boundary(
+            "Logs are kept,",
+            "which helps debugging."
+        ));
+        assert!(is_clause_boundary(
+            "If the build fails,",
+            "the logs are kept."
+        ));
+        assert!(is_clause_boundary(
+            "There are two options:",
+            "keep them or drop them."
+        ));
+        assert!(is_clause_boundary("It is fast —", "very fast indeed."));
+        assert!(is_clause_boundary(
+            "and when a developer creates a workspace,",
+            "the control plane runs it."
+        ));
+    }
+
+    #[test]
+    fn not_clause_boundaries() {
+        // Series.
+        assert!(!is_clause_boundary("The answer is A, B,", "or C today."));
+        // Plain commas, abbreviations, asides, and stranded single words.
+        assert!(!is_clause_boundary("However,", "the logs are kept."));
+        assert!(!is_clause_boundary(
+            "Use a provider, e.g.,",
+            "Okta or Keycloak."
+        ));
+        assert!(!is_clause_boundary("Pick one (fast,", "or slow) now."));
+        assert!(!is_clause_boundary("It is red,", "and."));
+        assert!(!is_clause_boundary("Logs are kept, the", "build fails."));
+        assert!(!is_clause_boundary("Start at 10:", "30 tomorrow."));
+        // "As" usually opens a phrase, not a clause.
+        assert!(!is_clause_boundary(
+            "As an Owner or Admin,",
+            "go to the settings."
+        ));
+    }
+
+    #[test]
+    fn non_ascii_words() {
+        assert!(is_clause_boundary(
+            "Visit Kyōto and Ōsaka,",
+            "and then Nagoya."
+        ));
+        assert!(is_boundary("Visit Kyōto.", "Then Ōsaka."));
+        assert!(!is_boundary("Ask Dr.", "Ōtsuka today."));
+    }
 
     #[test]
     fn plain_sentences() {
