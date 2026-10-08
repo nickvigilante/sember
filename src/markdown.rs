@@ -11,7 +11,7 @@
 //! A paragraph whose edits would change how the document renders is left as
 //! it was and reported, instead of being written or silently skipped.
 
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
@@ -171,9 +171,21 @@ impl Default for Config {
 }
 
 /// Rewrites the line breaks in a document's paragraph prose and leaves
-/// everything else untouched.
-pub fn format(src: &str, config: &Config) -> Formatted {
-    let runs = collect_runs(src);
+/// everything else untouched. With `lines`, only paragraphs that touch one
+/// of those 1-based line ranges are formatted.
+pub fn format(src: &str, config: &Config, lines: Option<&[RangeInclusive<usize>]>) -> Formatted {
+    let mut runs = collect_runs(src);
+    if let Some(lines) = lines {
+        let newlines: Vec<usize> = src.match_indices('\n').map(|(i, _)| i).collect();
+        let line_of = |offset: usize| newlines.partition_point(|&nl| nl < offset) + 1;
+        runs.retain(|run| {
+            let first = line_of(run.start);
+            let last = line_of(run.end);
+            lines
+                .iter()
+                .any(|range| *range.start() <= last && first <= *range.end())
+        });
+    }
     let edits: Vec<Vec<Edit>> = runs.iter().map(|run| run_edits(src, run, config)).collect();
     let all: Vec<&Edit> = edits.iter().flatten().collect();
     if all.is_empty() {
@@ -845,7 +857,7 @@ mod tests {
     use super::{Config, format};
 
     fn fmt(src: &str) -> String {
-        format(src, &Config::default()).output
+        format(src, &Config::default(), None).output
     }
 
     #[test]

@@ -81,10 +81,25 @@ links = "width"
   `--config PATH` uses one file for every input instead, and `--no-config` ignores config files.
 - **Mistakes are errors:** unknown keys, values and sections, and invalid globs, stop sember with exit status 2 before it writes anything.
 
+## Adopting it gradually
+
+`--changed REF` formats only the paragraphs that changed since a git ref (a branch, tag or commit), so a repository can adopt sember one edit at a time instead of in one huge diff.
+Uncommitted and untracked changes count, and an untracked file is formatted whole.
+With no paths, it formats every changed file under the current directory; with paths, it skips the files among them that didn't change.
+
+```sh
+# In CI: fail if any paragraph this branch touched isn't formatted.
+sember --check --changed origin/main
+
+# Before committing: format what you've changed since the last commit.
+sember --changed HEAD
+```
+
+In CI, fetch enough history for the ref to exist, for example `fetch-depth: 0` with `actions/checkout`.
+
 ## Status
 
 Early.
-Formatting only the paragraphs changed since a git ref is planned.
 
 ## What it guarantees
 
@@ -116,6 +131,9 @@ sember < draft.md > draft.sembr.md
 
 # Semantic line breaks, with the SemBr rules from .sember.toml.
 sember --style sembr docs/
+
+# Only the paragraphs changed since main.
+sember --changed main
 ```
 
 Exit status is 0 on success, 1 when `--check` finds files to reformat, and 2 on errors such as an unreadable file.

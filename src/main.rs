@@ -7,6 +7,9 @@ use clap::{Parser, ValueEnum};
 use sember::Config;
 use std::rc::Rc;
 
+mod changed;
+use changed::{Changes, Lines};
+
 use sember::config::{ConfigFile, Discovery, ExistingName, Partial, StyleName, builtin_format};
 
 /// Put each sentence of your Markdown on its own line.
@@ -49,6 +52,12 @@ struct Cli {
     /// Ignore `.sember.toml` files.
     #[arg(long)]
     no_config: bool,
+
+    /// Format only the paragraphs changed since this git ref (a branch, tag
+    /// or commit), counting uncommitted and untracked changes. With no
+    /// paths, formats every changed file under the current directory.
+    #[arg(long, value_name = "REF")]
+    changed: Option<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -187,16 +196,28 @@ fn main() -> ExitCode {
     } else {
         Settings::Discover(Discovery::default())
     };
-    let paths = if cli.paths.is_empty() {
-        vec![PathBuf::from("-")]
-    } else {
-        cli.paths
+    let changes = match cli.changed.as_deref().map(Changes::load).transpose() {
+        Ok(changes) => changes,
+        Err(err) => {
+            eprintln!("sember: {err}");
+            return ExitCode::from(2);
+        }
     };
+    let explicit = !cli.paths.is_empty();
+    let paths = match &changes {
+        Some(changes) if !explicit => changes.files().to_vec(),
+        _ if !explicit => vec![PathBuf::from("-")],
+        _ => cli.paths,
+    };
+    if changes.is_some() && paths.iter().any(|path| path == Path::new("-")) {
+        eprintln!("sember: --changed can't read stdin; name files or directories");
+        return ExitCode::from(2);
+    }
 
     let mut files = Vec::new();
     let mut failed = false;
     for path in &paths {
-        if let Err(err) = collect(path, true, &mut settings, &mut files) {
+        if let Err(err) = collect(path, explicit, &mut settings, &mut files) {
             eprintln!("sember: {}: {err}", path.display());
             failed = true;
         }
@@ -212,7 +233,20 @@ fn main() -> ExitCode {
                 continue;
             }
         };
-        match run(file, cli.check, &config) {
+        let lines = match changes
+            .as_ref()
+            .map(|changes| changes.lines(file))
+            .transpose()
+        {
+            Ok(Some(None)) => continue,
+            Ok(lines) => lines.flatten(),
+            Err(err) => {
+                eprintln!("sember: {}: {err}", file.display());
+                failed = true;
+                continue;
+            }
+        };
+        match run(file, cli.check, &config, lines) {
             Ok(true) => would_change.push(file),
             Ok(false) => {}
             Err(err) => {
@@ -286,9 +320,9 @@ fn collect(
     Ok(())
 }
 
-/// Formats one file. Returns whether its contents changed (or would, under
-/// `--check`).
-fn run(path: &Path, check: bool, config: &Config) -> io::Result<bool> {
+/// Formats one file, or with `lines` only the paragraphs on those lines.
+/// Returns whether its contents changed (or would, under `--check`).
+fn run(path: &Path, check: bool, config: &Config, lines: Option<Lines>) -> io::Result<bool> {
     let stdin = path == Path::new("-");
     let src = if stdin {
         let mut buf = String::new();
@@ -298,7 +332,10 @@ fn run(path: &Path, check: bool, config: &Config) -> io::Result<bool> {
         fs::read_to_string(path)?
     };
 
-    let formatted = sember::format_markdown(&src, config);
+    let formatted = match lines {
+        None | Some(Lines::All) => sember::format_markdown(&src, config),
+        Some(Lines::Ranges(ranges)) => sember::format_markdown_lines(&src, config, &ranges),
+    };
     for line in &formatted.kept {
         eprintln!(
             "{}:{line}: left as is: reformatting this paragraph would change how it renders",
