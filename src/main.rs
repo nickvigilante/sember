@@ -31,8 +31,8 @@ struct Cli {
     #[arg(long, value_enum)]
     style: Option<StyleArg>,
 
-    /// With `--style sembr`, add clause breaks only to lines longer than
-    /// this many characters. 0 breaks at every clause boundary [default: 0].
+    /// With `--style sembr`, the line length that rules set to `width`
+    /// break to stay within. 0 means no limit [default: 80].
     #[arg(long, value_name = "CHARS")]
     width: Option<usize>,
 
@@ -55,8 +55,11 @@ struct Cli {
 enum StyleArg {
     /// One sentence per line; sentences are never split.
     Sentence,
-    /// Semantic line breaks: sentences plus clause boundaries.
+    /// Semantic line breaks: sentences plus the SemBr rules set in
+    /// `.sember.toml`.
     Sembr,
+    /// One line per paragraph.
+    Paragraph,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -76,8 +79,10 @@ impl Cli {
             style: self.style.map(|style| match style {
                 StyleArg::Sentence => StyleName::Sentence,
                 StyleArg::Sembr => StyleName::Sembr,
+                StyleArg::Paragraph => StyleName::Paragraph,
             }),
             width: self.width,
+            sembr: Default::default(),
             existing_breaks: self.existing_breaks.map(|existing| match existing {
                 ExistingArg::Auto => ExistingName::Auto,
                 ExistingArg::Keep => ExistingName::Keep,

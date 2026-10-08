@@ -98,12 +98,12 @@ fn sembr_style_flag() {
     let out = sember(
         &["--style", "sembr"],
         dir.path(),
-        Some("If the build fails, the logs are kept.\n"),
+        Some("The build failed, and the logs are kept.\n"),
     );
     assert!(out.status.success());
     assert_eq!(
         String::from_utf8(out.stdout).unwrap(),
-        "If the build fails,\nthe logs are kept.\n"
+        "The build failed,\nand the logs are kept.\n"
     );
 }
 
@@ -112,9 +112,9 @@ mod config {
 
     use super::sember;
 
-    const SRC: &str = "If the build fails, the logs are kept. Then\nit retries.\n";
-    const SENTENCE: &str = "If the build fails, the logs are kept.\nThen it retries.\n";
-    const SEMBR: &str = "If the build fails,\nthe logs are kept.\nThen it retries.\n";
+    const SRC: &str = "The build failed, and the logs are kept. Then\nit retries.\n";
+    const SENTENCE: &str = "The build failed, and the logs are kept.\nThen it retries.\n";
+    const SEMBR: &str = "The build failed,\nand the logs are kept.\nThen it retries.\n";
 
     fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

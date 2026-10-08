@@ -8,17 +8,40 @@ The rendered page doesn't change, because Markdown joins the lines of a paragrap
 
 ## Styles
 
-- **`--style sentence`** (the default) puts one sentence per line and never splits a sentence.
-- **`--style sembr`** also breaks at clause boundaries: after `;`, `:` and dashes, before a conjunction or a word like "which" or "because" that follows a comma, and after an opening "If…," or "When…" clause.
-  Series ("A, B, or C"), abbreviations ("e.g.,") and asides in parentheses stay on one line, and a break never strands a single word.
+- **`sentence`** (the default) puts one sentence per line and never splits a sentence.
+- **`sembr`** follows the [Semantic Line Breaks specification](https://sembr.org): a break after every sentence, plus the optional rules below.
+- **`paragraph`** puts each paragraph on one line, joining every soft line break.
 
-In the `sembr` style:
+Choose one with `--style` or `style` in `.sember.toml`.
 
-- `--width N` adds clause breaks only to lines longer than N characters, at the last clause boundary that fits.
-  A line with no clause boundary stays long rather than breaking mid-phrase.
-- `--existing-breaks` decides what happens to line breaks already in a paragraph.
-  `auto` (the default) keeps breaks that follow punctuation, so a person's deliberate breaks survive, but reflows any paragraph that breaks mid-phrase, since it was hard-wrapped to a width.
-  `keep` always keeps breaks that follow punctuation, and `reflow` ignores existing breaks.
+### SemBr rules
+
+Each optional rule of the specification has a level: `always` breaks wherever the rule applies, `width` breaks only where a line would otherwise be longer than `width` characters, and `never` turns the rule off.
+The defaults follow the specification's wording: SHOULD and RECOMMENDED rules break `always`, and MAY rules break for `width` or `never`.
+
+```toml
+style = "sembr"
+width = 80                        # rule 12 recommends 80; 0 means no limit
+
+[sembr]
+independent-clauses = "always"    # rule 5: after an independent clause
+clause-punctuation = [",", ";", ":", "—", "–"]   # which marks count for rule 5
+dependent-clauses = "width"       # rule 6: "If the build fails, / the logs…"
+before-lists = "always"           # rule 7: before an inline (1) … (2) … list
+list-items = "never"              # rule 8: between items of "A, B, or C"
+links = "never"                   # rule 10: before or after a link
+inline-markup = "never"           # rule 11: before **bold**, `code` and so on
+```
+
+The other rules always hold and have no setting.
+A break never changes the rendered document (rule 2), every sentence ends a line (rule 4), sember only breaks at spaces, so never inside a hyphenated word (rule 9), and a line runs past the width when nothing allows a break (rule 13).
+A break also never leaves a single word on a line, and never splits an abbreviation such as "e.g.," or a parenthetical aside.
+
+### Existing line breaks
+
+In the `sembr` style, `existing-breaks` decides what happens to line breaks already in a paragraph.
+`auto` (the default) keeps breaks that follow punctuation, so a person's deliberate breaks survive, but reflows any paragraph that breaks mid-phrase, since it was hard-wrapped to a width.
+`keep` always keeps breaks that follow punctuation, and `reflow` ignores existing breaks.
 
 ## Configuration
 
@@ -27,7 +50,7 @@ The layout follows Vale's `.vale.ini`: project settings at the top, then section
 
 ```toml
 # Top level: project settings, and formatting defaults for every file.
-style = "sentence"                       # "sentence" (default) or "sembr"
+style = "sentence"                       # "sentence" (default), "sembr" or "paragraph"
 exclude = ["CHANGELOG.md", "vendor/**"]  # never formatted, even when named
 
 # Treat other extensions as a format sember knows.
@@ -39,10 +62,12 @@ mdx = "md"
 # so later sections win.
 ["docs/**"]
 style = "sembr"
-width = 80                 # sembr: clause breaks only on longer lines (0 = always)
 
 ["docs/legacy/**"]
-existing-breaks = "reflow" # sembr: "auto" (default), "keep" or "reflow"
+existing-breaks = "reflow"
+
+["docs/api/**".sembr]      # SemBr rules can differ per section too
+links = "width"
 ```
 
 - **Globs** work like `.gitignore` patterns.
@@ -89,8 +114,8 @@ sember --check docs/
 # Read stdin, write stdout.
 sember < draft.md > draft.sembr.md
 
-# Clause breaks too, only where a line is over 80 characters.
-sember --style sembr --width 80 docs/
+# Semantic line breaks, with the SemBr rules from .sember.toml.
+sember --style sembr docs/
 ```
 
 Exit status is 0 on success, 1 when `--check` finds files to reformat, and 2 on errors such as an unreadable file.

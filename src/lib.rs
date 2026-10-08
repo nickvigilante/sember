@@ -7,7 +7,9 @@ pub mod config;
 mod markdown;
 mod sentence;
 
-pub use markdown::{Config, ExistingBreaks, Formatted, Style};
+pub use markdown::{
+    ClausePunctuation, Config, ExistingBreaks, Formatted, Level, SembrRules, Style,
+};
 
 /// Reformats the line breaks in a Markdown document.
 ///
