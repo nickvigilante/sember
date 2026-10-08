@@ -455,9 +455,20 @@ fn run_edits(src: &str, run: &Run, config: &Config) -> Vec<Edit> {
                 .any(|slot| slot.existing && slot.kind == Kind::None && !slot.punctuated),
         };
 
+    // A line break next to a `:::` line belongs to a fenced div (Quarto,
+    // Pandoc) or an admonition (Docusaurus, MDX). Plain CommonMark reads it
+    // as paragraph text, so the rendering check can't see the damage that
+    // joining it would do; leave those breaks exactly as they are.
+    let fenced: Vec<bool> = slots
+        .iter()
+        .map(|slot| slot.existing && touches_fence_line(src, &slot.range))
+        .collect();
+
     let mut breaks: Vec<bool> = slots
         .iter()
-        .map(|slot| match slot.kind {
+        .zip(&fenced)
+        .map(|(slot, &fenced)| match slot.kind {
+            _ if fenced => true,
             Kind::Sentence | Kind::Hard => true,
             Kind::Clause | Kind::None => {
                 keep_existing && slot.existing && (slot.kind == Kind::Clause || slot.punctuated)
@@ -482,8 +493,8 @@ fn run_edits(src: &str, run: &Run, config: &Config) -> Vec<Edit> {
     }
 
     let mut edits = Vec::new();
-    for (slot, brk) in slots.iter().zip(breaks) {
-        if slot.kind == Kind::Hard {
+    for ((slot, brk), fenced) in slots.iter().zip(breaks).zip(fenced) {
+        if slot.kind == Kind::Hard || fenced {
             continue;
         }
         let replacement = if brk {
@@ -539,6 +550,15 @@ fn fit_to_width(slots: &[Slot], breaks: &mut [bool], total: usize, indent: usize
             None => break,
         }
     }
+}
+
+/// Whether the line before or after a line break starts with `:::`, after
+/// any container prefix.
+fn touches_fence_line(src: &str, gap: &Range<usize>) -> bool {
+    let is_fence = |line: &str| line.trim_start_matches(['>', ' ', '\t']).starts_with(":::");
+    let previous_start = src[..gap.start].rfind('\n').map_or(0, |i| i + 1);
+    let next_end = src[gap.end..].find('\n').map_or(src.len(), |i| gap.end + i);
+    is_fence(&src[previous_start..gap.start]) || is_fence(&src[gap.end..next_end])
 }
 
 /// Whether a line starting with `text` could be read as the start of a new

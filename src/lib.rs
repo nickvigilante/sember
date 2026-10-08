@@ -3,6 +3,7 @@
 //! The library entry point is [`format_markdown`]; the `sember` binary wraps
 //! it with file handling and a `--check` mode.
 
+pub mod config;
 mod markdown;
 mod sentence;
 

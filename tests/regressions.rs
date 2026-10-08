@@ -68,6 +68,16 @@ fn commas_and_abbreviations() {
     );
 }
 
+/// Fenced divs (Quarto, Pandoc) and admonitions (Docusaurus, MDX) look
+/// like paragraph text to CommonMark; their `:::` lines must stay put.
+#[test]
+fn fenced_divs_and_admonitions() {
+    assert_formats(
+        "::: {.callout-note}\nSome text. More\ntext.\n:::\n\n:::tip\nA tip. Another.\n:::\n",
+        "::: {.callout-note}\nSome text.\nMore text.\n:::\n\n:::tip\nA tip.\nAnother.\n:::\n",
+    );
+}
+
 /// Hard-wrapped text in nested containers is unwrapped with the right prefix.
 #[test]
 fn nested_containers() {

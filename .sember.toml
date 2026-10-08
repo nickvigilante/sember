@@ -1,0 +1,2 @@
+# sember formats its own docs to the default style: one sentence per line.
+style = "sentence"
