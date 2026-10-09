@@ -6,6 +6,82 @@ sember rewrites Markdown so that each sentence sits on its own source line.
 Hard-wrapped paragraphs are unwrapped, and long lines holding several sentences are split.
 The rendered page doesn't change, because Markdown joins the lines of a paragraph back together, but a diff now shows exactly which sentence changed.
 
+## Example
+
+A hard-wrapped paragraph:
+
+```markdown
+Docs live in the repo, so every change goes through review. When a sentence changes
+in a hard-wrapped paragraph, the diff shows the whole paragraph, because the
+wrapping moved. With one sentence per line, it shows only that sentence.
+```
+
+After `sember`:
+
+```markdown
+Docs live in the repo, so every change goes through review.
+When a sentence changes in a hard-wrapped paragraph, the diff shows the whole paragraph, because the wrapping moved.
+With one sentence per line, it shows only that sentence.
+```
+
+After `sember --style sembr`, which also breaks after independent clauses (`, so`) and introductory ones (`When …,`), the latter only where they help keep lines under 80 characters:
+
+```markdown
+Docs live in the repo,
+so every change goes through review.
+When a sentence changes in a hard-wrapped paragraph,
+the diff shows the whole paragraph, because the wrapping moved.
+With one sentence per line, it shows only that sentence.
+```
+
+## Install
+
+sember is built from source with Cargo, so it needs Rust 1.88 or newer.
+There are no prebuilt binaries yet.
+
+```sh
+cargo install --git https://github.com/nickvigilante/sember
+```
+
+The pre-commit hooks and the GitHub Action below build it for you.
+
+## Usage
+
+```sh
+# Rewrite files in place; directories are searched for .md and .markdown files.
+sember README.md docs/
+
+# Exit with status 1 if anything would change, without writing (for CI).
+sember --check docs/
+
+# Read stdin, write stdout.
+sember < draft.md > draft.sembr.md
+
+# Semantic line breaks, with the SemBr rules from .sember.toml.
+sember --style sembr docs/
+
+# Only the paragraphs changed since main.
+sember --changed main
+```
+
+Exit status is 0 on success, 1 when `--check` finds files to reformat, and 2 on errors such as an unreadable file.
+
+### Options
+
+| Option                   | What it does                                                                                                   |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `--check`                | Write nothing; exit with status 1 if any file would change.                                                    |
+| `--style STYLE`          | `sentence` (default), `sembr` or `paragraph`; see [Styles](#styles).                                           |
+| `--width CHARS`          | In the `sembr` style, the line length that rules set to `width` stay within; 0 means no limit (default 80).    |
+| `--existing-breaks MODE` | In the `sembr` style, `auto` (default), `keep` or `reflow`; see [Existing line breaks](#existing-line-breaks). |
+| `--lead-in PLACE`        | `own-line` (default) or `same-line`; see [Bold lead-ins](#bold-lead-ins).                                      |
+| `--changed REF`          | Format only the paragraphs changed since a git ref; see [Adopting it gradually](#adopting-it-gradually).       |
+| `--config PATH`          | Use this config file for every input instead of searching for `.sember.toml`.                                  |
+| `--no-config`            | Ignore `.sember.toml` files.                                                                                   |
+
+Flags override `.sember.toml`.
+`sember --help` lists them with their accepted values.
+
 ## Styles
 
 - **`sentence`** (the default) puts one sentence per line and never splits a sentence.
@@ -156,10 +232,6 @@ Its `files` output lists the files that need formatting, one per line.
 
 The action builds sember from source the first time and caches the binary, so later runs take seconds.
 
-## Status
-
-Early.
-
 ## What it guarantees
 
 - **Only whitespace inside paragraphs and list items changes.**
@@ -176,32 +248,22 @@ Early.
 When a sentence boundary is ambiguous, sember keeps the text on one line.
 "Dr. Smith", "e.g. Rust", "U.S. Army" and "Fig. 3" are never split.
 
-## Usage
+## Limitations
 
-```sh
-# Rewrite files in place; directories are searched for .md and .markdown files.
-sember README.md docs/
+- **Sentence detection is built for English.**
+  A sentence ends at `.`, `!` or `?` when the next word starts with a capital letter, a digit or inline code, after any opening quote or bracket.
+- **A sentence that starts in lowercase stays joined to the one before it**, as in `It ends. pre-commit builds it`.
+  That looks the same as an abbreviation, so sember keeps the text on one line.
+- **An abbreviation sember doesn't know looks like the end of a sentence** when a capitalized word follows it.
+  `Yesterday Rep. Jones voted no.` gets a line break after `Rep.`, which changes only the source, not the rendered page.
+  The built-in list covers common abbreviations such as "e.g.", "Dr.", "Fig." and the month names, and it isn't configurable yet.
+- **MDX and Quarto files are formatted as Markdown** when you map them under `[formats]`.
+  Lines next to `:::` fences are left alone, and a paragraph whose rewrite would change the rendering is reported and kept, but JSX and other syntax beyond CommonMark and GitHub's extensions aren't understood.
 
-# Exit with status 1 if anything would change, without writing (for CI).
-sember --check docs/
+## Status
 
-# Read stdin, write stdout.
-sember < draft.md > draft.sembr.md
-
-# Semantic line breaks, with the SemBr rules from .sember.toml.
-sember --style sembr docs/
-
-# Only the paragraphs changed since main.
-sember --changed main
-```
-
-Exit status is 0 on success, 1 when `--check` finds files to reformat, and 2 on errors such as an unreadable file.
-
-## Install
-
-```sh
-cargo install --git https://github.com/nickvigilante/sember
-```
+Early, at version 0.1.0 with no tagged release yet.
+The settings and the command-line flags may still change before 1.0.
 
 ## License
 
