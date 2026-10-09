@@ -28,6 +28,11 @@ inputs:
     required: false
     default: "."
 
+outputs:
+  files:
+    description: The files that need formatting, one per line, relative to the repository.
+    value: ${{ steps.check.outputs.files }}
+
 runs:
   using: composite
   steps:
@@ -41,7 +46,7 @@ runs:
         echo "key=sember-${{ runner.os }}-${{ runner.arch }}-$key" >> "$GITHUB_OUTPUT"
     - name: Restore sember
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/sember/bin
         key: ${{ steps.source.outputs.key }}
@@ -51,6 +56,7 @@ runs:
       run: cargo install --locked --quiet --path "$GITHUB_ACTION_PATH" --root "$RUNNER_TEMP/sember"
 
     - name: Run sember --check
+      id: check
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -60,11 +66,12 @@ runs:
         ARGS: ${{ inputs.args }}
         WORKDIR: ${{ inputs.working-directory }}
       run: |
-        set -uo pipefail
+        # The runner adds -e; sember exiting 1 must still reach the annotations.
+        set +e -uo pipefail
         if [ -z "$CHANGED" ] && [ -n "$BASE_REF" ]; then
           # Comparing trees needs only the base branch's tip, not history,
           # so a shallow checkout works.
-          git fetch --quiet --no-tags --depth=1 origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          git fetch --quiet --no-tags --depth=1 origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF" || exit 2
           CHANGED="origin/$BASE_REF"
         fi
         cmd=("$RUNNER_TEMP/sember/bin/sember" --check)
@@ -83,7 +90,11 @@ runs:
         # paths, and sember prints them relative to the working directory.
         prefix=${WORKDIR%/}/
         [ "$prefix" = "./" ] && prefix=
+        files=$(sed -n 's/^would reformat //p' "$log" | while IFS= read -r file; do
+          echo "$prefix${file#./}"
+        done)
         while IFS= read -r file; do
-          echo "::error file=$prefix${file#./},title=sember::Not formatted; run sember on this file."
-        done < <(sed -n 's/^would reformat //p' "$log")
+          [ -n "$file" ] && echo "::error file=$file,title=sember::Not formatted; run sember on this file."
+        done <<< "$files"
+        { echo "files<<SEMBER_EOF"; echo "$files"; echo "SEMBER_EOF"; } >> "$GITHUB_OUTPUT"
         exit $status

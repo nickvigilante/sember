@@ -134,6 +134,8 @@ Its inputs are all optional:
 - `args`: extra arguments, such as `--style sembr`.
 - `working-directory`: where to run sember.
 
+Its `files` output lists the files that need formatting, one per line.
+
 The action builds sember from source the first time and caches the binary, so later runs take seconds.
 
 ## Status

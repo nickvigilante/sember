@@ -69,8 +69,10 @@ jobs:
           changed: "false"
           paths: unformatted.md
 
-      - name: Expect that check to fail
-        if: steps.unformatted.outcome != 'failure'
+      - name: Expect that check to fail and name the file
+        if: steps.unformatted.outcome != 'failure' || steps.unformatted.outputs.files != 'unformatted.md'
+        env:
+          FILES: ${{ steps.unformatted.outputs.files }}
         run: |
-          echo "::error::the action passed an unformatted file"
+          echo "::error::expected a failure naming unformatted.md, got: $FILES"
           exit 1
