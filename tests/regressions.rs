@@ -393,3 +393,53 @@ mod changed_lines {
         assert_eq!(fmt(&[(3, 3), (6, 6)]), SRC);
     }
 }
+
+mod lead_ins {
+    use sember::{Config, LeadIn, Style, format_markdown};
+
+    const SRC: &str = "- **No logs.** Check the log.\n- **Note:** this is short.\n- **Note**: also this.\n- **Term** — not a lead-in.\n\n**Heads up!** A paragraph.\n\nPlain **bold.** Not a lead-in.\n";
+
+    fn fmt(style: Style, lead_in: LeadIn) -> String {
+        let config = Config {
+            style,
+            lead_in,
+            ..Config::default()
+        };
+        format_markdown(SRC, &config).output
+    }
+
+    #[test]
+    fn own_line_by_default() {
+        assert_eq!(
+            fmt(Style::Sentence, LeadIn::default()),
+            "- **No logs.**\n  Check the log.\n- **Note:**\n  this is short.\n- **Note**:\n  also this.\n- **Term** — not a lead-in.\n\n**Heads up!**\nA paragraph.\n\nPlain **bold.**\nNot a lead-in.\n"
+        );
+    }
+
+    #[test]
+    fn same_line_keeps_the_text_after_it() {
+        let joined = "- **No logs.** Check the log.\n- **Note:** this is short.\n- **Note**: also this.\n- **Term** — not a lead-in.\n\n**Heads up!** A paragraph.\n\nPlain **bold.**\nNot a lead-in.\n";
+        assert_eq!(fmt(Style::Sentence, LeadIn::SameLine), joined);
+        assert_eq!(fmt(Style::Sembr, LeadIn::SameLine), joined);
+        let split = "- **No logs.**\n  Check the log.\n";
+        assert_eq!(
+            format_markdown(
+                split,
+                &Config {
+                    lead_in: LeadIn::SameLine,
+                    ..Config::default()
+                }
+            )
+            .output,
+            "- **No logs.** Check the log.\n"
+        );
+    }
+
+    #[test]
+    fn paragraph_style_ignores_it() {
+        assert_eq!(
+            fmt(Style::Paragraph, LeadIn::OwnLine),
+            "- **No logs.** Check the log.\n- **Note:** this is short.\n- **Note**: also this.\n- **Term** — not a lead-in.\n\n**Heads up!** A paragraph.\n\nPlain **bold.** Not a lead-in.\n"
+        );
+    }
+}

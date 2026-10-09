@@ -145,6 +145,18 @@ pub enum ExistingBreaks {
     Reflow,
 }
 
+/// Where a bold lead-in goes: the `**Label.**` that opens a paragraph or
+/// list item, ending in `.`, `:`, `!` or `?` (inside the bold or right
+/// after it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LeadIn {
+    /// On a line of its own, with the text after it starting the next line.
+    #[default]
+    OwnLine,
+    /// On the same line as the sentence after it.
+    SameLine,
+}
+
 /// Formatting options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
@@ -157,6 +169,8 @@ pub struct Config {
     pub existing_breaks: ExistingBreaks,
     /// In the `sembr` style, which SemBr rules apply.
     pub sembr: SembrRules,
+    /// Where a bold lead-in goes, in every style but `paragraph`.
+    pub lead_in: LeadIn,
 }
 
 impl Default for Config {
@@ -166,6 +180,7 @@ impl Default for Config {
             width: 80,
             existing_breaks: ExistingBreaks::default(),
             sembr: SembrRules::default(),
+            lead_in: LeadIn::default(),
         }
     }
 }
@@ -266,6 +281,8 @@ struct Run {
     /// Where inline markup starts: emphasis, strong, strikethrough, code
     /// spans and inline HTML (rule 11).
     markup: Vec<usize>,
+    /// Where the bold text the run opens with ends, if it opens with bold.
+    lead_in: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -399,6 +416,8 @@ fn collect_runs(src: &str) -> Vec<Run> {
             pieces: Vec::new(),
             links: Vec::new(),
             markup: Vec::new(),
+            // A start event's range covers the whole element.
+            lead_in: matches!(&event, Event::Start(Tag::Strong)).then_some(range.end),
         });
         if let Some((gap_start, breakable)) = pending_gap.take() {
             run.pieces.push(Piece::Gap {
@@ -489,6 +508,8 @@ enum Kind {
     Sentence,
     /// A hard break in the source: always kept.
     Hard,
+    /// Right after a bold lead-in: placed by [`LeadIn`].
+    LeadIn,
     /// Anywhere else. In the `sembr` style, `rule` says whether a SemBr rule
     /// applies here and at what level.
     Prose,
@@ -509,6 +530,9 @@ fn slots(src: &str, run: &Run, config: &Config) -> Vec<Slot> {
         let mut rule = None;
         let kind = if !allowed {
             Kind::Prose
+        } else if follows_lead_in(src, run, range.start) {
+            clause_start = range.end;
+            Kind::LeadIn
         } else if sentence::is_boundary(before, after) {
             clause_start = range.end;
             Kind::Sentence
@@ -600,6 +624,25 @@ fn slots(src: &str, run: &Run, config: &Config) -> Vec<Slot> {
     slots
 }
 
+/// Whether a slot starting at `at` comes right after the run's bold
+/// lead-in, and the lead-in ends in `.`, `:`, `!` or `?`, inside the bold or
+/// just after it (`**Note:**`, `**Note**:`).
+fn follows_lead_in(src: &str, run: &Run, at: usize) -> bool {
+    let Some(end) = run.lead_in else {
+        return false;
+    };
+    if at < end {
+        return false;
+    }
+    let between = &src[end..at];
+    if !between.chars().all(|c| matches!(c, '.' | ':' | '!' | '?')) {
+        return false;
+    }
+    src[run.start..at]
+        .trim_end_matches(['*', '_'])
+        .ends_with(['.', ':', '!', '?'])
+}
+
 /// Decides which slots in a run become line breaks, and returns the edits.
 fn run_edits(src: &str, run: &Run, config: &Config) -> Vec<Edit> {
     let prefix = continuation_prefix(src, run);
@@ -638,6 +681,7 @@ fn run_edits(src: &str, run: &Run, config: &Config) -> Vec<Edit> {
             _ if fenced => true,
             Kind::Hard => true,
             Kind::Sentence => config.style != Style::Paragraph,
+            Kind::LeadIn => config.style != Style::Paragraph && config.lead_in == LeadIn::OwnLine,
             Kind::Prose => {
                 let deliberate = slot.punctuated || slot.rule.is_some_and(|l| l > Level::Never);
                 slot.rule == Some(Level::Always) || keep_existing && slot.existing && deliberate

@@ -38,7 +38,7 @@ use globset::{GlobBuilder, GlobMatcher};
 use serde::Deserialize;
 use toml::{Table, Value};
 
-use crate::{ClausePunctuation, Config, ExistingBreaks, Level, Style};
+use crate::{ClausePunctuation, Config, ExistingBreaks, LeadIn, Level, Style};
 
 /// The config file's name.
 pub const FILE_NAME: &str = ".sember.toml";
@@ -73,6 +73,7 @@ pub struct Partial {
     pub style: Option<StyleName>,
     pub width: Option<usize>,
     pub existing_breaks: Option<ExistingName>,
+    pub lead_in: Option<LeadInName>,
     pub sembr: SembrPartial,
 }
 
@@ -200,6 +201,13 @@ pub enum ExistingName {
     Reflow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LeadInName {
+    OwnLine,
+    SameLine,
+}
+
 impl Partial {
     /// Applies the settings this layer sets on top of `config`.
     pub fn apply(&self, config: &mut Config) {
@@ -221,6 +229,12 @@ impl Partial {
                 ExistingName::Reflow => ExistingBreaks::Reflow,
             };
         }
+        if let Some(lead_in) = self.lead_in {
+            config.lead_in = match lead_in {
+                LeadInName::OwnLine => LeadIn::OwnLine,
+                LeadInName::SameLine => LeadIn::SameLine,
+            };
+        }
     }
 
     /// Reads a formatting setting, returning false if `key` isn't one.
@@ -235,6 +249,7 @@ impl Partial {
             "style" => self.style = Some(typed(key, value)?),
             "width" => self.width = Some(typed(key, value)?),
             "existing-breaks" => self.existing_breaks = Some(typed(key, value)?),
+            "lead-in" => self.lead_in = Some(typed(key, value)?),
             "sembr" => {
                 let Value::Table(table) = value else {
                     return Err("`sembr`: expected a table of rules".to_owned());
@@ -376,7 +391,7 @@ impl ConfigFile {
                             .map_err(|e| format!("[\"{name}\"] {e}"))?;
                         if !known {
                             return Err(format!(
-                                "[\"{name}\"]: unknown key `{key}`; expected `style`, `width`, `existing-breaks` or `sembr`"
+                                "[\"{name}\"]: unknown key `{key}`; expected `style`, `width`, `existing-breaks`, `lead-in` or `sembr`"
                             ));
                         }
                     }
@@ -384,7 +399,7 @@ impl ConfigFile {
                 }
                 (key, _) => {
                     return Err(format!(
-                        "unknown key `{key}`; expected `style`, `width`, `existing-breaks`, `sembr`, `exclude`, `formats` or a glob section"
+                        "unknown key `{key}`; expected `style`, `width`, `existing-breaks`, `lead-in`, `sembr`, `exclude`, `formats` or a glob section"
                     ));
                 }
             }
@@ -459,7 +474,7 @@ mod tests {
     use std::path::Path;
 
     use super::{ConfigFile, Format};
-    use crate::{Config, ExistingBreaks, Level, Style};
+    use crate::{Config, ExistingBreaks, LeadIn, Level, Style};
 
     fn parse(text: &str) -> ConfigFile {
         ConfigFile::parse(text, Path::new("/repo")).unwrap()
@@ -478,6 +493,18 @@ mod tests {
         assert_eq!(config.style, Style::Sembr);
         assert_eq!(config.width, 80);
         assert_eq!(config.existing_breaks, ExistingBreaks::Keep);
+    }
+
+    #[test]
+    fn lead_in_setting() {
+        let file = parse("lead-in = \"same-line\"\n[\"docs/**\"]\nlead-in = \"own-line\"\n");
+        assert_eq!(config_for(&file, "/repo/a.md").lead_in, LeadIn::SameLine);
+        assert_eq!(
+            config_for(&file, "/repo/docs/a.md").lead_in,
+            LeadIn::OwnLine
+        );
+        assert_eq!(Config::default().lead_in, LeadIn::OwnLine);
+        assert!(ConfigFile::parse("lead-in = \"below\"\n", Path::new("/repo")).is_err());
     }
 
     #[test]
