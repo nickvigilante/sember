@@ -43,6 +43,19 @@ In the `sembr` style, `existing-breaks` decides what happens to line breaks alre
 `auto` (the default) keeps breaks that follow punctuation, so a person's deliberate breaks survive, but reflows any paragraph that breaks mid-phrase, since it was hard-wrapped to a width.
 `keep` always keeps breaks that follow punctuation, and `reflow` ignores existing breaks.
 
+### Bold lead-ins
+
+A paragraph or list item can open with a bold label that ends in `.`, `:`, `!` or `?`, such as `**Note:**` or `**No logs from one node.**`.
+`lead-in` decides where the text after it goes.
+`own-line` (the default) starts that text on the next line, and `same-line` keeps it next to the label.
+
+```markdown
+- **No logs from one node.**
+  Check that node's log.
+```
+
+The `paragraph` style ignores this setting and keeps each paragraph on one line.
+
 ## Configuration
 
 Put a `.sember.toml` in your repository so every run, pre-commit hook and CI job uses the same standard.
@@ -51,6 +64,7 @@ The layout follows Vale's `.vale.ini`: project settings at the top, then section
 ```toml
 # Top level: project settings, and formatting defaults for every file.
 style = "sentence"                       # "sentence" (default), "sembr" or "paragraph"
+lead-in = "own-line"                     # or "same-line"
 exclude = ["CHANGELOG.md", "vendor/**"]  # never formatted, even when named
 
 # Treat other extensions as a format sember knows.
@@ -73,13 +87,17 @@ links = "width"
 - **Globs** work like `.gitignore` patterns.
   One containing `/` matches the path relative to the config file, where `*` stays within a directory and `**` crosses directories.
   One without `/` matches the file name at any depth, so `["*.mdx"]` covers every MDX file.
-- **Formats:** directory runs pick up `.md` and `.markdown` files plus every extension listed under `[formats]`.
+- **Formats:**
+  directory runs pick up `.md` and `.markdown` files plus every extension listed under `[formats]`.
   Naming a file with an unmapped extension is an error that suggests the mapping.
   Lines next to a `:::` fence (Quarto and Pandoc divs, Docusaurus admonitions) are never joined or split.
-- **Which file applies:** for each file, sember uses the nearest `.sember.toml` in its directory or a parent, stopping at the repository root (the directory with `.git`).
-- **Precedence:** the defaults, then the top-level settings, then each matching section, then command-line flags.
+- **Which file applies:**
+  for each file, sember uses the nearest `.sember.toml` in its directory or a parent, stopping at the repository root (the directory with `.git`).
+- **Precedence:**
+  the defaults, then the top-level settings, then each matching section, then command-line flags.
   `--config PATH` uses one file for every input instead, and `--no-config` ignores config files.
-- **Mistakes are errors:** unknown keys, values and sections, and invalid globs, stop sember with exit status 2 before it writes anything.
+- **Mistakes are errors:**
+  unknown keys, values and sections, and invalid globs, stop sember with exit status 2 before it writes anything.
 
 ## Adopting it gradually
 

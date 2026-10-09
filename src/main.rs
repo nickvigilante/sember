@@ -10,7 +10,9 @@ use std::rc::Rc;
 mod changed;
 use changed::{Changes, Lines};
 
-use sember::config::{ConfigFile, Discovery, ExistingName, Partial, StyleName, builtin_format};
+use sember::config::{
+    ConfigFile, Discovery, ExistingName, LeadInName, Partial, StyleName, builtin_format,
+};
 
 /// Put each sentence of your Markdown on its own line.
 ///
@@ -44,6 +46,11 @@ struct Cli {
     #[arg(long, value_enum)]
     existing_breaks: Option<ExistingArg>,
 
+    /// Where a bold lead-in such as `**Note:**` at the start of a paragraph
+    /// or list item goes [default: own-line].
+    #[arg(long, value_enum)]
+    lead_in: Option<LeadInArg>,
+
     /// Use this config file for every input instead of searching for
     /// `.sember.toml`.
     #[arg(long, value_name = "PATH", conflicts_with = "no_config")]
@@ -72,6 +79,14 @@ enum StyleArg {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
+enum LeadInArg {
+    /// On its own line, with the text after it on the next line.
+    OwnLine,
+    /// On the same line as the text after it.
+    SameLine,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
 enum ExistingArg {
     /// Keep clause breaks unless the paragraph is hard-wrapped.
     Auto,
@@ -96,6 +111,10 @@ impl Cli {
                 ExistingArg::Auto => ExistingName::Auto,
                 ExistingArg::Keep => ExistingName::Keep,
                 ExistingArg::Reflow => ExistingName::Reflow,
+            }),
+            lead_in: self.lead_in.map(|lead_in| match lead_in {
+                LeadInArg::OwnLine => LeadInName::OwnLine,
+                LeadInArg::SameLine => LeadInName::SameLine,
             }),
         }
     }
