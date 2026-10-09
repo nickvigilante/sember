@@ -1,0 +1,20 @@
+# Hooks for https://pre-commit.com. pre-commit builds sember from this
+# repository with cargo, so the machine running the hook needs Rust.
+
+# Formats every Markdown file in the commit.
+- id: sember
+  name: sember
+  description: Put each sentence of your Markdown on its own line.
+  entry: sember
+  language: rust
+  types_or: [markdown]
+
+# Formats only the paragraphs the commit changes, for repositories adopting
+# sember gradually. pre-commit stashes unstaged changes first, so the diff
+# against HEAD is exactly what's being committed.
+- id: sember-changed
+  name: sember (changed paragraphs)
+  description: Format only the Markdown paragraphs changed since HEAD.
+  entry: sember --changed HEAD
+  language: rust
+  types_or: [markdown]

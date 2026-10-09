@@ -95,7 +95,46 @@ sember --check --changed origin/main
 sember --changed HEAD
 ```
 
-In CI, fetch enough history for the ref to exist, for example `fetch-depth: 0` with `actions/checkout`.
+In CI, fetch the ref before running sember, since `actions/checkout` fetches only the commit it checks out.
+The GitHub Action below does this for you.
+
+### pre-commit
+
+```yaml
+repos:
+  - repo: https://github.com/nickvigilante/sember
+    rev: main  # or a commit SHA
+    hooks:
+      - id: sember-changed  # or `sember` to format whole files
+```
+
+`sember` formats every Markdown file in the commit, and `sember-changed` formats only the paragraphs the commit changes.
+The hooks need Rust installed, since pre-commit builds sember with cargo.
+Both hooks pick up `.sember.toml`; to include other extensions mapped under `[formats]`, set the hook's `types_or` or `files`.
+
+### GitHub Actions
+
+```yaml
+on: pull_request
+
+jobs:
+  sember:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: nickvigilante/sember@main  # or a commit SHA
+```
+
+On a pull request, the action checks only the paragraphs changed since the base branch, and marks each file that needs formatting.
+Its inputs are all optional:
+
+- `changed`: the git ref to compare against, or `false` to check whole files.
+  On other events it defaults to checking whole files.
+- `paths`: files or directories to check, separated by spaces.
+- `args`: extra arguments, such as `--style sembr`.
+- `working-directory`: where to run sember.
+
+The action builds sember from source the first time and caches the binary, so later runs take seconds.
 
 ## Status
 

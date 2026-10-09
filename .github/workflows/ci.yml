@@ -46,3 +46,31 @@ jobs:
       # sember's own docs follow the style it enforces.
       - name: sember --check
         run: cargo run --quiet --locked -- --check README.md
+
+  # Runs the GitHub Action in this repository against sember's own docs, and
+  # checks that it fails on a file that isn't formatted.
+  action:
+    name: action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check sember's docs
+        uses: ./
+
+      - name: Add an unformatted file
+        run: printf 'One sentence. Another\nsentence.\n' > unformatted.md
+
+      - name: Check the unformatted file
+        id: unformatted
+        continue-on-error: true
+        uses: ./
+        with:
+          changed: "false"
+          paths: unformatted.md
+
+      - name: Expect that check to fail
+        if: steps.unformatted.outcome != 'failure'
+        run: |
+          echo "::error::the action passed an unformatted file"
+          exit 1

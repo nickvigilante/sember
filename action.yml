@@ -1,0 +1,89 @@
+name: sember
+description: Check that Markdown follows semantic line breaks.
+author: Nick Vigilante
+branding:
+  icon: align-left
+  color: orange
+
+inputs:
+  changed:
+    description: >-
+      Check only the paragraphs changed since this git ref. Defaults to the
+      base branch on pull requests, so a repository can adopt sember one PR
+      at a time. Set it to "false" to check whole files.
+    required: false
+    default: ""
+  paths:
+    description: >-
+      Files or directories to check, separated by spaces. Defaults to every
+      changed file with `changed`, otherwise ".".
+    required: false
+    default: ""
+  args:
+    description: Extra arguments for sember, such as `--style sembr`.
+    required: false
+    default: ""
+  working-directory:
+    description: Where to run sember. Config files are found from each file up.
+    required: false
+    default: "."
+
+runs:
+  using: composite
+  steps:
+    # Build the sember this action was pinned to, cached by its source.
+    - name: Fingerprint sember's source
+      id: source
+      shell: bash
+      run: |
+        cd "$GITHUB_ACTION_PATH"
+        key=$(find Cargo.toml Cargo.lock src -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
+        echo "key=sember-${{ runner.os }}-${{ runner.arch }}-$key" >> "$GITHUB_OUTPUT"
+    - name: Restore sember
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/sember/bin
+        key: ${{ steps.source.outputs.key }}
+    - name: Build sember
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo install --locked --quiet --path "$GITHUB_ACTION_PATH" --root "$RUNNER_TEMP/sember"
+
+    - name: Run sember --check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CHANGED: ${{ inputs.changed }}
+        BASE_REF: ${{ github.base_ref }}
+        PATHS: ${{ inputs.paths }}
+        ARGS: ${{ inputs.args }}
+        WORKDIR: ${{ inputs.working-directory }}
+      run: |
+        set -uo pipefail
+        if [ -z "$CHANGED" ] && [ -n "$BASE_REF" ]; then
+          # Comparing trees needs only the base branch's tip, not history,
+          # so a shallow checkout works.
+          git fetch --quiet --no-tags --depth=1 origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          CHANGED="origin/$BASE_REF"
+        fi
+        cmd=("$RUNNER_TEMP/sember/bin/sember" --check)
+        if [ -n "$CHANGED" ] && [ "$CHANGED" != "false" ]; then
+          cmd+=(--changed "$CHANGED")
+        elif [ -z "$PATHS" ]; then
+          PATHS=.
+        fi
+        read -ra extra <<< "$ARGS"
+        read -ra paths <<< "$PATHS"
+        log="$RUNNER_TEMP/sember.log"
+        "${cmd[@]}" "${extra[@]}" "${paths[@]}" 2> "$log"
+        status=$?
+        cat "$log" >&2
+        # One annotation per file. Annotations take repository-relative
+        # paths, and sember prints them relative to the working directory.
+        prefix=${WORKDIR%/}/
+        [ "$prefix" = "./" ] && prefix=
+        while IFS= read -r file; do
+          echo "::error file=$prefix${file#./},title=sember::Not formatted; run sember on this file."
+        done < <(sed -n 's/^would reformat //p' "$log")
+        exit $status
