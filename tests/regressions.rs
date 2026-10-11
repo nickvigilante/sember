@@ -443,3 +443,12 @@ mod lead_ins {
         );
     }
 }
+
+#[test]
+fn code_span_with_a_period_ends_a_sentence() {
+    let config = sember::Config::default();
+    assert_eq!(
+        sember::format_markdown("Run `make test.` Then deploy it.\n", &config).output,
+        "Run `make test.`\nThen deploy it.\n"
+    );
+}

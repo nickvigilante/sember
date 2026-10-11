@@ -14,9 +14,12 @@ const NEVER_FINAL: &[&str] = &[
 ];
 
 /// Characters that can close a sentence after its final punctuation, as in
-/// `word.)`, `"Quoted."` or `*emphasised.*`.
+/// `word.)`, `"Quoted."`, `*emphasised.*` or a code span ending in a period.
 fn is_closer(c: char) -> bool {
-    matches!(c, '"' | '\'' | ')' | ']' | '*' | '_' | '”' | '’' | '»')
+    matches!(
+        c,
+        '"' | '\'' | ')' | ']' | '*' | '_' | '”' | '’' | '»' | '`'
+    )
 }
 
 /// Characters that can open a sentence before its first letter.
@@ -280,6 +283,14 @@ mod tests {
             clause("Pick the red one,", "the blue one, or both."),
             Some(Clause::ListItem)
         );
+    }
+
+    #[test]
+    fn code_span_ends_a_sentence() {
+        assert!(is_boundary("Run `make test.`", "Then deploy."));
+        assert!(is_boundary("Run ``make test.``", "Then deploy."));
+        assert!(!is_boundary("Use `e.g.`", "Rust here."));
+        assert!(!is_boundary("Run `make test.`", "then deploy."));
     }
 
     #[test]
