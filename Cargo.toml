@@ -6,6 +6,7 @@ rust-version = "1.88"
 description = "Semantic line breaks for cleaner text and smaller, more manageable diffs."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/nickvigilante/sember"
+homepage = "https://github.com/nickvigilante/sember"
 readme = "README.md"
 keywords = ["markdown", "formatter", "sembr", "cli"]
 categories = ["command-line-utilities", "text-processing"]
@@ -23,3 +24,8 @@ tempfile = "3.27.0"
 [profile.release]
 lto = true
 codegen-units = 1
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
