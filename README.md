@@ -36,11 +36,30 @@ With one sentence per line, it shows only that sentence.
 
 ## Install
 
-sember is built from source with Cargo, so it needs Rust 1.88 or newer.
-There are no prebuilt binaries yet.
+Prebuilt binaries for macOS, Linux and Windows are attached to each [GitHub release](https://github.com/nickvigilante/sember/releases).
+
+Homebrew:
 
 ```sh
-cargo install --git https://github.com/nickvigilante/sember
+brew install nickvigilante/tap/sember
+```
+
+macOS and Linux shell installer:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/nickvigilante/sember/releases/latest/download/sember-installer.sh | sh
+```
+
+Windows PowerShell installer:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/nickvigilante/sember/releases/latest/download/sember-installer.ps1 | iex"
+```
+
+Or build it with Cargo, which needs Rust 1.88 or newer:
+
+```sh
+cargo install sember
 ```
 
 The pre-commit hooks and the GitHub Action below build it for you.
