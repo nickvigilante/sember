@@ -1,5 +1,7 @@
-# Hooks for https://pre-commit.com. pre-commit builds sember from this
-# repository with cargo, so the machine running the hook needs Rust.
+# Hooks for https://pre-commit.com. The sember and sember-changed hooks have
+# pre-commit build sember from this repository with cargo, so the machine
+# running them needs Rust. The sember-system hooks run a sember you already
+# installed (Homebrew, npm, a release binary), so they need no Rust.
 
 # Formats every Markdown file in the commit.
 - id: sember
@@ -17,4 +19,20 @@
   description: Format only the Markdown paragraphs changed since HEAD.
   entry: sember --changed HEAD
   language: rust
+  types_or: [markdown]
+
+# Like sember, but runs the sember on your PATH instead of building one.
+- id: sember-system
+  name: sember
+  description: Put each sentence of your Markdown on its own line, using an installed sember.
+  entry: sember
+  language: system
+  types_or: [markdown]
+
+# Like sember-changed, but runs the sember on your PATH instead of building one.
+- id: sember-system-changed
+  name: sember (changed paragraphs)
+  description: Format only the Markdown paragraphs changed since HEAD, using an installed sember.
+  entry: sember --changed HEAD
+  language: system
   types_or: [markdown]

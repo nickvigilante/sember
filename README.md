@@ -200,6 +200,53 @@ links = "width"
 - **Mistakes are errors:**
   unknown keys, values and sections, and invalid globs, stop sember with exit status 2 before it writes anything.
 
+## Use in CI
+
+`sember --check` exits with status 1 if any file would change, and prints `would reformat FILE` for each one.
+It writes nothing, so it's safe to run anywhere.
+Pin the version you install, so a new release can't change your formatting under you.
+
+| Install | Pinned |
+| --- | --- |
+| Homebrew | `brew install nickvigilante/tap/sember` (use `brew pin sember` to hold it) |
+| cargo-binstall | `cargo binstall --no-confirm sember@0.1.2` |
+| Shell installer | `https://github.com/nickvigilante/sember/releases/download/v0.1.2/sember-installer.sh` (a release's own URL, not `latest`) |
+| npm | `npm install --save-exact @nickvigilante/sember@0.1.2` |
+
+To run it from a Makefile:
+
+```make
+.PHONY: fmt/markdown lint/markdown
+
+fmt/markdown:
+	sember docs/ *.md
+
+lint/markdown:
+	sember --check docs/ *.md
+```
+
+With pnpm, add sember as a dev dependency and call it with `pnpm exec sember` in the targets above.
+The npm package downloads sember's binary in an install script, and pnpm doesn't run dependency scripts until you allow them.
+In pnpm 10, add the package to `package.json`:
+
+```json
+{
+  "pnpm": {
+    "onlyBuiltDependencies": ["@nickvigilante/sember"]
+  }
+}
+```
+
+In pnpm 12, `package.json` isn't read for this, so use `pnpm-workspace.yaml` instead:
+
+```yaml
+allowBuilds:
+  "@nickvigilante/sember": true
+```
+
+Without the allowance, `pnpm install` stops with `ERR_PNPM_IGNORED_BUILDS`.
+For GitHub Actions, use the [action](#github-actions) below.
+
 ## Adopting it gradually
 
 `--changed REF` formats only the paragraphs that changed since a git ref (a branch, tag or commit), so a repository can adopt sember one edit at a time instead of in one huge diff.
@@ -228,8 +275,10 @@ repos:
 ```
 
 `sember` formats every Markdown file in the commit, and `sember-changed` formats only the paragraphs the commit changes.
-The hooks need Rust installed, since pre-commit builds sember with cargo.
-Both hooks pick up `.sember.toml`; to include other extensions mapped under `[formats]`, set the hook's `types_or` or `files`.
+These hooks need Rust installed, since pre-commit builds sember with cargo.
+If you'd rather not install Rust, [install sember](#install) and use `sember-system` and `sember-system-changed` instead.
+They behave the same, but run the `sember` on your `PATH`, so everyone who runs the hook needs it installed.
+All four hooks pick up `.sember.toml`; to include other extensions mapped under `[formats]`, set the hook's `types_or` or `files`.
 
 ### GitHub Actions
 
@@ -255,7 +304,9 @@ Its inputs are all optional:
 
 Its `files` output lists the files that need formatting, one per line.
 
-The action builds sember from source the first time and caches the binary, so later runs take seconds.
+The action downloads the prebuilt sember release that matches the version you pin and checks its checksum, so a run takes seconds.
+It has prebuilt binaries for Linux and macOS.
+On other platforms, or when the pinned commit isn't a release, it builds sember from source and caches the binary.
 
 ## What it guarantees
 
