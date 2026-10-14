@@ -36,9 +36,57 @@ outputs:
 runs:
   using: composite
   steps:
-    # Build the sember this action was pinned to, cached by its source.
+    # Prefer the prebuilt release that matches the version this action was
+    # pinned to. Anything unexpected falls through to building from source:
+    # a platform without a prebuilt, a version that isn't released yet, a
+    # runner without gh, or a checksum mismatch.
+    - name: Install sember
+      id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ACTION_REPO: ${{ github.action_repository || github.repository }}
+      run: |
+        set +e -u
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) target=x86_64-unknown-linux-musl ;;
+          Linux-ARM64) target=aarch64-unknown-linux-musl ;;
+          macOS-X64) target=x86_64-apple-darwin ;;
+          macOS-ARM64) target=aarch64-apple-darwin ;;
+          *) echo "No prebuilt sember for $RUNNER_OS-$RUNNER_ARCH; building from source."; exit 0 ;;
+        esac
+        version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$GITHUB_ACTION_PATH/Cargo.toml" | head -n 1)
+        archive="sember-$target.tar.xz"
+        dir="$RUNNER_TEMP/sember-download"
+        rm -rf "$dir"
+        mkdir -p "$dir" "$RUNNER_TEMP/sember/bin"
+        if ! gh release download "v$version" --repo "$ACTION_REPO" --dir "$dir" \
+          --pattern "$archive" --pattern "$archive.sha256"; then
+          echo "No prebuilt sember v$version; building from source."
+          exit 0
+        fi
+        expected=$(awk 'NR == 1 { print $1 }' "$dir/$archive.sha256")
+        if command -v sha256sum > /dev/null; then
+          actual=$(sha256sum "$dir/$archive" | awk '{ print $1 }')
+        else
+          actual=$(shasum -a 256 "$dir/$archive" | awk '{ print $1 }')
+        fi
+        if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+          echo "::warning::Checksum mismatch for $archive; building from source."
+          exit 0
+        fi
+        if tar -xJf "$dir/$archive" -C "$dir" && \
+          install -m 755 "$dir/sember-$target/sember" "$RUNNER_TEMP/sember/bin/sember"; then
+          echo "installed=true" >> "$GITHUB_OUTPUT"
+          "$RUNNER_TEMP/sember/bin/sember" --version
+        else
+          echo "Could not unpack $archive; building from source."
+        fi
+
+    # Otherwise build the sember this action was pinned to, cached by its source.
     - name: Fingerprint sember's source
       id: source
+      if: steps.install.outputs.installed != 'true'
       shell: bash
       run: |
         cd "$GITHUB_ACTION_PATH"
@@ -46,12 +94,13 @@ runs:
         echo "key=sember-${{ runner.os }}-${{ runner.arch }}-$key" >> "$GITHUB_OUTPUT"
     - name: Restore sember
       id: cache
+      if: steps.install.outputs.installed != 'true'
       uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/sember/bin
         key: ${{ steps.source.outputs.key }}
     - name: Build sember
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: steps.install.outputs.installed != 'true' && steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: cargo install --locked --quiet --path "$GITHUB_ACTION_PATH" --root "$RUNNER_TEMP/sember"
 
