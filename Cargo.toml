@@ -1,6 +1,6 @@
 [package]
 name = "sember"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Semantic line breaks for cleaner text and smaller, more manageable diffs."
@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/nickvigilante/sember"
 homepage = "https://github.com/nickvigilante/sember"
 readme = "README.md"
+exclude = [".github/", "dist-workspace.toml"]
 keywords = ["markdown", "formatter", "sembr", "cli"]
 categories = ["command-line-utilities", "text-processing"]
 
