@@ -56,6 +56,12 @@ Windows PowerShell installer:
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/nickvigilante/sember/releases/latest/download/sember-installer.ps1 | iex"
 ```
 
+npm:
+
+```sh
+npm install -g @nickvigilante/sember
+```
+
 Or build it with Cargo, which needs Rust 1.88 or newer:
 
 ```sh
