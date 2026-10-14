@@ -209,9 +209,9 @@ Pin the version you install, so a new release can't change your formatting under
 | Install | Pinned |
 | --- | --- |
 | Homebrew | `brew install nickvigilante/tap/sember` (use `brew pin sember` to hold it) |
-| cargo-binstall | `cargo binstall --no-confirm sember@0.1.2` |
-| Shell installer | `https://github.com/nickvigilante/sember/releases/download/v0.1.2/sember-installer.sh` (a release's own URL, not `latest`) |
-| npm | `npm install --save-exact @nickvigilante/sember@0.1.2` |
+| cargo-binstall | `cargo binstall --no-confirm sember@0.1.3` |
+| Shell installer | `https://github.com/nickvigilante/sember/releases/download/v0.1.3/sember-installer.sh` (a release's own URL, not `latest`) |
+| npm | `npm install --save-exact @nickvigilante/sember@0.1.3` |
 
 To run it from a Makefile:
 
