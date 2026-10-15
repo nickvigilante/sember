@@ -327,8 +327,9 @@ When a sentence boundary is ambiguous, sember keeps the text on one line.
 ## Limitations
 
 - **Sentence detection is built for English.**
-  A sentence ends at `.`, `!` or `?` when the next word starts with a capital letter, a digit or inline code, after any opening quote or bracket.
-- **A sentence that starts in lowercase stays joined to the one before it**, as in `It ends. pre-commit builds it`.
+  A sentence ends at `.`, `!` or `?` when the next word starts with a capital letter, a digit or inline code, after any opening quote, bracket or emphasis marker.
+  So a sentence can start with a link or image whose text starts that way, as in ``[`docs/`](docs/) explains it`` or `[Docs](docs/) explain it`, or with emphasis around a capital, as in `**Note:**`.
+- **A sentence that starts in lowercase stays joined to the one before it**, as in `It ends. pre-commit builds it` or `It ends. [docs](docs/) explain it`.
   That looks the same as an abbreviation, so sember keeps the text on one line.
 - **An abbreviation sember doesn't know looks like the end of a sentence** when a capitalized word follows it.
   `Yesterday Rep. Jones voted no.` gets a line break after `Rep.`, which changes only the source, not the rendered page.
