@@ -92,10 +92,15 @@ fn is_abbreviation(text: &str) -> bool {
     NEVER_FINAL.contains(&lower.as_str())
 }
 
+/// Whether `after` starts a sentence: its first word, after any opening
+/// quotes, brackets, link or image openers (`[`, `![`) and emphasis markers,
+/// starts with a capital letter, a digit or inline code.
 fn starts_sentence(after: &str) -> bool {
-    let rest = after.trim_start_matches(|c: char| is_opener(c) && c != '`');
-    if after.starts_with('`') {
-        // A sentence that opens with inline code: "`coder` is the CLI."
+    let rest = after.trim_start_matches(is_opener);
+    let openers = &after[..after.len() - rest.len()];
+    if openers.contains('`') {
+        // A sentence that opens with inline code, possibly inside a link or
+        // emphasis: "`coder` is the CLI.", "[`docs/`](docs/) explains it."
         return true;
     }
     rest.chars()
@@ -377,6 +382,34 @@ mod tests {
         assert!(is_boundary("This is *bold.*", "Next."));
         assert!(is_boundary("Run it.", "`coder` is the CLI."));
         assert!(is_boundary("Read the guide.", "[Learn more](x)."));
+    }
+
+    #[test]
+    fn markup_at_sentence_start() {
+        // Links and images whose text starts with a capital, a digit or code.
+        assert!(is_boundary("It ends.", "[Docs](docs/) explain it."));
+        assert!(is_boundary("It ends.", "[2 notes](n/) follow."));
+        assert!(is_boundary("It ends.", "[`docs/`](docs/) explains it."));
+        assert!(is_boundary("It ends.", "![Diagram](d.png) shows it."));
+        assert!(is_boundary("It ends.", "![`flow`](d.png) shows it."));
+        // Inline code, alone or inside emphasis.
+        assert!(is_boundary("It ends.", "`sember` fixes it."));
+        assert!(is_boundary("It ends.", "**`sember`** fixes it."));
+        // Emphasis around a capital.
+        assert!(is_boundary("It ends.", "*Note* the order."));
+        assert!(is_boundary("It ends.", "**Warning:** it breaks."));
+        assert!(is_boundary("It ends.", "_Then_ it stops."));
+    }
+
+    #[test]
+    fn markup_after_abbreviation_or_before_lowercase_joins() {
+        assert!(!is_boundary("Use a tool, e.g.", "[link](x) here."));
+        assert!(!is_boundary("Use a tool, e.g.", "[`tool`](x) here."));
+        assert!(!is_boundary("Use a tool, e.g.", "`tool` here."));
+        assert!(!is_boundary("Ask Dr.", "[Smith](x) today."));
+        assert!(!is_boundary("It ends.", "[docs](docs/) explain it."));
+        assert!(!is_boundary("It ends.", "*then* it stops."));
+        assert!(!is_boundary("It ends.", "_then_ it stops."));
     }
 
     #[test]

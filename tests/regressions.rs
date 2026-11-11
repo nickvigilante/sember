@@ -452,3 +452,14 @@ fn code_span_with_a_period_ends_a_sentence() {
         "Run `make test.`\nThen deploy it.\n"
     );
 }
+
+/// A sentence that opens with a link around inline code starts its own line.
+#[test]
+fn link_with_code_starts_a_sentence() {
+    let src = "First sentence ends here.\n[`docs/`](docs/) explains each choice.\n";
+    assert_formats(src, src);
+    assert_formats(
+        "First sentence ends here. [`docs/`](docs/) explains each choice.\n",
+        src,
+    );
+}
